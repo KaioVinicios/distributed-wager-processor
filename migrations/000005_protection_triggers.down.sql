@@ -1,0 +1,20 @@
+DROP TRIGGER outbox_guard ON outbox_events;
+DROP TRIGGER wager_tx_no_delete ON wager_transactions;
+DROP TRIGGER wager_tx_guard ON wager_transactions;
+DROP TRIGGER wallet_no_delete ON wallets;
+DROP TRIGGER wallet_guard ON wallets;
+DROP TRIGGER wager_tx_processed_has_ledger ON wager_transactions;
+DROP TRIGGER wallet_balance_has_ledger ON wallets;
+DROP TRIGGER ledger_matches_wallet ON wallet_ledger_entries;
+DROP TRIGGER ledger_no_truncate ON wallet_ledger_entries;
+DROP TRIGGER ledger_no_update_delete ON wallet_ledger_entries;
+
+DROP FUNCTION outbox_guard_update();
+DROP FUNCTION wager_tx_guard_delete();
+DROP FUNCTION wager_tx_guard_update();
+DROP FUNCTION wallet_guard_delete();
+DROP FUNCTION wallet_guard_update();
+DROP FUNCTION wager_tx_require_ledger();
+DROP FUNCTION wallet_require_ledger();
+DROP FUNCTION ledger_check_wallet();
+DROP FUNCTION ledger_block_mutation();
