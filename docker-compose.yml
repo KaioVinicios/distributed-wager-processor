@@ -26,6 +26,8 @@ x-app: &app
       condition: service_completed_successfully
     aws-init:
       condition: service_completed_successfully
+    keycloak:
+      condition: service_healthy # JWKS fetched on start (fail fast, D-07)
   healthcheck:
     test: ["CMD", "/pda", "healthcheck"]
     interval: 5s

@@ -50,7 +50,7 @@ linters:
             - { pkg: github.com/KaioVinicios/pda/internal/adapters, desc: "domínio não conhece adaptadores" }
             - { pkg: github.com/KaioVinicios/pda/internal/apperrors, desc: "domínio usa apenas os próprios erros" }
         app:
-          files: ["**/internal/app/**"]
+          files: ["**/internal/app/**", "!$test"] # os testes usam o adapter real (spec do M3, decisão 18)
           deny:
             - { pkg: go.uber.org/fx, desc: "Fx só em bootstrap e adaptadores" }
             - { pkg: net/http, desc: "casos de uso não conhecem HTTP" }
