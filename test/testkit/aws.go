@@ -2,6 +2,7 @@ package testkit
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -62,30 +63,73 @@ func AWSConfigWithKeys(tb testing.TB, k AWSKeys) aws.Config {
 // receives, test-plan §3.2) and deletes them at cleanup unless PDA_TEST_KEEP=1.
 func CreateQueues(tb testing.TB, client *sqs.Client) (wager, dlq string) {
 	tb.Helper()
-	ctx := context.Background()
+	wager, dlq, remove, err := createQueues(context.Background(), client)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(remove)
+	return wager, dlq
+}
+
+// createQueues is CreateQueues for callers without a testing.TB, such as
+// TestMain; remove deletes the queues unless PDA_TEST_KEEP=1.
+func createQueues(ctx context.Context, client *sqs.Client) (wager, dlq string, remove func(), err error) {
 	suffix := uuid.NewString()[:8]
 	dlq, wager = "wager-dlq-"+suffix+".fifo", "wager-"+suffix+".fifo"
 
 	dlqOut, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String(dlq), Attributes: map[string]string{"FifoQueue": "true"}})
 	if err != nil {
-		tb.Fatalf("create %s: %v", dlq, err)
+		return "", "", nil, fmt.Errorf("testkit: create %s: %w", dlq, err)
+	}
+	urls := []*string{dlqOut.QueueUrl}
+	remove = func() {
+		if os.Getenv("PDA_TEST_KEEP") == "1" {
+			return
+		}
+		for _, url := range urls {
+			_, _ = client.DeleteQueue(context.WithoutCancel(ctx), &sqs.DeleteQueueInput{QueueUrl: url})
+		}
 	}
 	attrs, err := client.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{QueueUrl: dlqOut.QueueUrl, AttributeNames: []types.QueueAttributeName{types.QueueAttributeNameQueueArn}})
 	if err != nil {
-		tb.Fatalf("dlq arn: %v", err)
+		remove()
+		return "", "", nil, fmt.Errorf("testkit: dlq arn: %w", err)
 	}
 	redrive := `{"deadLetterTargetArn":"` + attrs.Attributes["QueueArn"] + `","maxReceiveCount":"3"}`
 	wagerOut, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String(wager), Attributes: map[string]string{"FifoQueue": "true", "RedrivePolicy": redrive}})
 	if err != nil {
-		tb.Fatalf("create %s: %v", wager, err)
+		remove()
+		return "", "", nil, fmt.Errorf("testkit: create %s: %w", wager, err)
 	}
-	tb.Cleanup(func() {
-		if os.Getenv("PDA_TEST_KEEP") == "1" {
-			return
+	urls = append(urls, wagerOut.QueueUrl)
+	return wager, dlq, remove, nil
+}
+
+// rootAWS points the SDK default chain of this process, used by the
+// application started in process, at MiniStack with the root key, and returns
+// a client with the same key. For TestMain, where t.Setenv is not available.
+func rootAWS(ctx context.Context) (*sqs.Client, error) {
+	vals, err := LoadDotEnv()
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range map[string]string{
+		"AWS_ENDPOINT_URL": MiniStackURL, "AWS_REGION": vals["AWS_REGION"],
+		"AWS_ACCESS_KEY_ID": rootKey, "AWS_SECRET_ACCESS_KEY": rootKey,
+	} {
+		if err := os.Setenv(k, v); err != nil {
+			return nil, err
 		}
-		for _, url := range []*string{wagerOut.QueueUrl, dlqOut.QueueUrl} {
-			_, _ = client.DeleteQueue(context.Background(), &sqs.DeleteQueueInput{QueueUrl: url})
+	}
+	for _, k := range []string{"AWS_PROFILE", "AWS_SHARED_CREDENTIALS_FILE"} {
+		if err := os.Unsetenv(k); err != nil {
+			return nil, err
 		}
-	})
-	return wager, dlq
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(vals["AWS_REGION"]), awsconfig.WithBaseEndpoint(MiniStackURL),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(rootKey, rootKey, "")))
+	if err != nil {
+		return nil, fmt.Errorf("testkit: aws config: %w", err)
+	}
+	return sqs.NewFromConfig(cfg), nil
 }

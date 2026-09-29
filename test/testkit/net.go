@@ -9,13 +9,19 @@ import (
 // FreeAddr reserves a loopback port and releases it for the code under test.
 func FreeAddr(tb testing.TB) string {
 	tb.Helper()
-	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	addr, err := freeAddr(tb.Context())
 	if err != nil {
-		tb.Fatalf("listen: %v", err)
-	}
-	addr := ln.Addr().String()
-	if err := ln.Close(); err != nil {
-		tb.Fatalf("close: %v", err)
+		tb.Fatal(err)
 	}
 	return addr
+}
+
+// freeAddr is FreeAddr for callers without a testing.TB.
+func freeAddr(ctx context.Context) (string, error) {
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	addr := ln.Addr().String()
+	return addr, ln.Close()
 }
