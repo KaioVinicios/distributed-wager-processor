@@ -130,3 +130,6 @@ coverage.*
 *.coverprofile
 profile.cov
 go.work.sum
+
+# Local AWS credentials written by aws-init (random IAM keys)
+.local/

@@ -1,0 +1,9 @@
+.git
+.claude
+.local
+.env
+docs
+test
+*.md
+coverage.*
+*.coverprofile

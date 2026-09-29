@@ -1,0 +1,117 @@
+version: "2"
+
+run:
+  go: "1.27"
+  timeout: 5m
+  tests: true
+  build-tags:
+    - integration
+    - e2e
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - containedctx
+    - contextcheck
+    - copyloopvar
+    - depguard
+    - errname
+    - errorlint
+    - exhaustive
+    - fatcontext
+    - forbidigo
+    - gocritic
+    - gosec
+    - intrange
+    - misspell
+    - musttag
+    - noctx
+    - nolintlint
+    - promlinter
+    - sloglint
+    - sqlclosecheck
+    - thelper
+    - unconvert
+    - usestdlibvars
+
+  settings:
+    depguard:
+      rules:
+        domain:
+          files: ["**/internal/domain/**"]
+          deny:
+            - { pkg: go.uber.org/fx, desc: "domínio independente de Fx (DOM-07)" }
+            - { pkg: net/http, desc: "domínio independente de HTTP (DOM-07)" }
+            - { pkg: github.com/aws, desc: "domínio independente de SQS/SNS (DOM-07)" }
+            - { pkg: github.com/jackc/pgx, desc: "domínio independente de persistência (DOM-07)" }
+            - { pkg: database/sql, desc: "domínio independente de persistência (DOM-07)" }
+            - { pkg: github.com/KaioVinicios/pda/internal/app, desc: "domínio não conhece a aplicação" }
+            - { pkg: github.com/KaioVinicios/pda/internal/adapters, desc: "domínio não conhece adaptadores" }
+            - { pkg: github.com/KaioVinicios/pda/internal/apperrors, desc: "domínio usa apenas os próprios erros" }
+        app:
+          files: ["**/internal/app/**"]
+          deny:
+            - { pkg: go.uber.org/fx, desc: "Fx só em bootstrap e adaptadores" }
+            - { pkg: net/http, desc: "casos de uso não conhecem HTTP" }
+            - { pkg: github.com/aws, desc: "casos de uso não conhecem SQS/SNS" }
+            - { pkg: github.com/jackc/pgx, desc: "casos de uso dependem de portas, não do driver" }
+            - { pkg: github.com/KaioVinicios/pda/internal/adapters, desc: "portas pertencem ao app" }
+            - { pkg: github.com/KaioVinicios/pda/internal/auth, desc: "autorização é feita na borda" }
+        apperrors:
+          files: ["**/internal/apperrors/**", "!$test"]
+          deny:
+            - { pkg: github.com/KaioVinicios/pda/internal, desc: "apperrors é um pacote folha" }
+
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: '^float(32|64)$'
+          msg: "dinheiro nunca usa ponto flutuante (CHALLENGE §5.1): use money.Money"
+        - pattern: '^strconv\.(ParseFloat|FormatFloat)$'
+          msg: "dinheiro nunca usa ponto flutuante (CHALLENGE §5.1): use money.Parse"
+        - pattern: '^fmt\.Print(f|ln)?$'
+          msg: "use log/slog"
+
+    errcheck:
+      check-type-assertions: true
+    exhaustive:
+      default-signifies-exhaustive: false
+    gocritic:
+      enabled-tags: [diagnostic, performance]
+      disabled-checks: [hugeParam]
+    gosec:
+      excludes: [G104] # já coberto pelo errcheck
+    misspell:
+      locale: US
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    sloglint:
+      no-mixed-args: true
+      key-naming-case: camel
+      static-msg: true
+
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+      - std-error-handling
+    rules:
+      - path: internal/observability/
+        linters: [forbidigo] # a API do Prometheus exige float64; nunca é dinheiro
+      - path: test/load/
+        linters: [forbidigo] # percentis de latência no teste de carga opcional
+      - path: _test\.go
+        linters: [gosec, containedctx]
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      module-path: github.com/KaioVinicios/pda
+    goimports:
+      local-prefixes:
+        - github.com/KaioVinicios/pda
