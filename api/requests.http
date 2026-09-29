@@ -1,0 +1,126 @@
+# Coleção do fluxo completo (D-20): REST Client do VS Code ou HTTP Client do JetBrains.
+# Pré-requisito: `docker compose up --build`. Os segredos são os valores locais do .env.example.
+# Ordem: tokens → abrir carteira → BET → replay → rejeição → consultas → reconciliação.
+# Para repetir o fluxo do zero, troque @playerId (a abertura é única por jogador e moeda) e os
+# externalTransactionId/Idempotency-Key das operações.
+
+@api = http://localhost:8081
+@kc = http://localhost:8080/realms/pda/protocol/openid-connect/token
+@playerId = 0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1
+
+### 1. Token do serviço interno (role wallet-internal)
+# @name internalToken
+POST {{kc}}
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials&client_id=wallet-service&client_secret=wallet-service-local-secret
+
+### 2. Token do provedor A (role provider, provider_id=provider-a)
+# @name providerToken
+POST {{kc}}
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials&client_id=provider-a&client_secret=provider-a-local-secret
+
+### 3. Abrir carteira com 100.00 BRL → 201 (repetir → 409 WALLET_ALREADY_EXISTS)
+# @name wallet
+POST {{api}}/wallets
+Authorization: Bearer {{internalToken.response.body.access_token}}
+Content-Type: application/json
+
+{
+  "playerId": "{{playerId}}",
+  "initialBalance": { "amount": "100.00", "currency": "BRL" }
+}
+
+### 4. BET de 80.00 → 200 PROCESSED, saldo 20.00
+POST {{api}}/wagering/transactions
+Authorization: Bearer {{providerToken.response.body.access_token}}
+Content-Type: application/json
+Idempotency-Key: provider-a:bet-1
+
+{
+  "providerId": "provider-a",
+  "externalTransactionId": "bet-1",
+  "playerId": "{{playerId}}",
+  "walletId": "{{wallet.response.body.id}}",
+  "roundId": "round-1",
+  "gameId": "fortune-chimp",
+  "kind": "BET",
+  "money": { "amount": "80.00", "currency": "BRL" }
+}
+
+### 5. Replay da mesma BET → 200, idempotentReplay: true, saldo original 20.00
+POST {{api}}/wagering/transactions
+Authorization: Bearer {{providerToken.response.body.access_token}}
+Content-Type: application/json
+Idempotency-Key: provider-a:bet-1
+
+{
+  "providerId": "provider-a",
+  "externalTransactionId": "bet-1",
+  "playerId": "{{playerId}}",
+  "walletId": "{{wallet.response.body.id}}",
+  "roundId": "round-1",
+  "gameId": "fortune-chimp",
+  "kind": "BET",
+  "money": { "amount": "80.00", "currency": "BRL" }
+}
+
+### 6. Segunda BET de 80.00 → 422 REJECTED / INSUFFICIENT_FUNDS
+# @name rejected
+POST {{api}}/wagering/transactions
+Authorization: Bearer {{providerToken.response.body.access_token}}
+Content-Type: application/json
+Idempotency-Key: provider-a:bet-2
+
+{
+  "providerId": "provider-a",
+  "externalTransactionId": "bet-2",
+  "playerId": "{{playerId}}",
+  "walletId": "{{wallet.response.body.id}}",
+  "roundId": "round-1",
+  "gameId": "fortune-chimp",
+  "kind": "BET",
+  "money": { "amount": "80.00", "currency": "BRL" }
+}
+
+### 7. Mesma chave com outro conteúdo → 409 IDEMPOTENCY_KEY_REUSED
+POST {{api}}/wagering/transactions
+Authorization: Bearer {{providerToken.response.body.access_token}}
+Content-Type: application/json
+Idempotency-Key: provider-a:bet-1
+
+{
+  "providerId": "provider-a",
+  "externalTransactionId": "bet-1",
+  "playerId": "{{playerId}}",
+  "walletId": "{{wallet.response.body.id}}",
+  "roundId": "round-1",
+  "gameId": "fortune-chimp",
+  "kind": "BET",
+  "money": { "amount": "1.00", "currency": "BRL" }
+}
+
+### 8. Consultar a rejeição pelo id interno (provedor)
+GET {{api}}/wagering/transactions/{{rejected.response.body.transactionId}}
+Authorization: Bearer {{providerToken.response.body.access_token}}
+
+### 9. Consultar pelo id externo
+GET {{api}}/providers/provider-a/wagering/transactions/bet-1
+Authorization: Bearer {{providerToken.response.body.access_token}}
+
+### 10. Carteira (interno)
+GET {{api}}/wallets/{{wallet.response.body.id}}
+Authorization: Bearer {{internalToken.response.body.access_token}}
+
+### 11. Ledger (interno): abertura + débito, ordenados pela versão
+GET {{api}}/wallets/{{wallet.response.body.id}}/ledger?limit=50
+Authorization: Bearer {{internalToken.response.body.access_token}}
+
+### 12. Reconciliação (interno) → consistent: true, checkedEntries: 2
+POST {{api}}/wallets/{{wallet.response.body.id}}/reconciliation
+Authorization: Bearer {{internalToken.response.body.access_token}}
+
+### 13. Sem token → 401 UNAUTHENTICATED
+GET {{api}}/wallets/{{wallet.response.body.id}}
