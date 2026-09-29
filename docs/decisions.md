@@ -125,6 +125,14 @@ As versões fixadas, as imagens, as ferramentas de lint e formatação e a confo
 - `GET /wagering/transactions/:id` e `GET /providers/:providerId/wagering/transactions/:extId` devolvem a **representação completa** da transação: tipo, valor, referências, `status`, `failureCode`/`failureCategory`, `balance` quando concluída e, se `PENDING_REFERENCE`, `attempts`, `nextAttemptAt` e `expiresAt`. É assim que o cliente acompanha pendências (HTTP-04).
 - `POST /wallets/:id/reconciliation`: 200 inclusive quando há divergência. `consistent: false` indica o problema.
 
+**Detalhes do contrato** (spec do M3, 29/09/2026; o contrato completo está em [`api/openapi.yaml`](../api/openapi.yaml)):
+- **`problem+json`:** `type: "about:blank"`, `title` com o texto do status, `status`, `detail` fixo por código (nunca ecoa valores recebidos), `code`, `category`, `field` (quando há um campo ou parâmetro culpado) e `correlationId`.
+- **Tipo JSON errado** (ex.: `"amount": 25.00`, `"money": "x"`) é detectado na decodificação e responde com o código do campo: `INVALID_AMOUNT` para `money.amount`, `INVALID_CURRENCY` para `money.currency`, `INVALID_KIND` para `kind` e `INVALID_FIELD` para os demais. O número nunca é convertido, então não passa por `float`. `null` equivale a ausente (`MISSING_FIELD`).
+- **Dois 500 distinguíveis pelo `Content-Type`:** `application/json` com `status: FAILED` é a falha permanente **registrada**; `application/problem+json` com `INTERNAL_ERROR` é um erro interno sem registro (`panic`, ou uma linha já gravada que não pode ser lida), e reenviar com a mesma chave é seguro.
+- **Rotas:** caminho inexistente → 404 `ROUTE_NOT_FOUND`; método errado → 405 `METHOD_NOT_ALLOWED` com `Allow`. Os dois em `problem+json`, sem exigir token.
+- **503:** sempre com `Retry-After: 1`.
+- **Representações:** `Wallet` inclui `createdAt` e `updatedAt`; o `201` do `POST /wallets` traz `Location`. A representação de transação não expõe a `idempotencyKey`.
+
 ---
 
 ## D-05 — Processamento e máquina de estados ⚙️ [TX-06..10]
@@ -199,6 +207,10 @@ Um segundo realm, `other`, com um client de teste, fornece tokens com `iss` e ch
 
 **Segunda armadilha, a audience implícita:** o client scope padrão `roles` do Keycloak traz o mapper `audience resolve`, que põe em `aud` todo client do qual o token tem roles. Com ele, o `no-audience-client` receberia `aud: pda-api` e o teste de audience inválida não testaria nada. O `realm-pda.json` declara o scope `roles` **só com o mapper `client roles`**, e a audience vem exclusivamente do `oidc-audience-mapper` de cada client ([`dev/spike-keycloak.md`](dev/spike-keycloak.md) §2).
 
+**Tolerância de relógio** (spec do M3, 29/09/2026): no go-oidc v3.21.0, o `exp` é comparado **sem** tolerância e o `nbf` tem uma tolerância fixa de 5 min. A tolerância de 30 s do `exp` é aplicada pelo `Config.Now` do verificador (`agora − OIDC_CLOCK_SKEW`), configurável; os testes de integração usam 1 s, para que o teste de token expirado (5 s de vida) não precise esperar 36 s.
+
+**Fail fast e dependência do IdP:** o módulo `auth` busca o JWKS no `OnStart` (200 e ao menos uma chave RSA), e as réplicas do compose dependem do Keycloak saudável. O Keycloak não entra no readiness, que o desafio define como PostgreSQL + SQS.
+
 **Healthcheck:** a imagem não tem `curl` nem `wget`. O compose usa `bash` com `/dev/tcp` contra `GET /health/ready` na porta de gerenciamento 9000 (`KC_HEALTH_ENABLED=true`).
 
 **Matriz de permissões:**
@@ -215,6 +227,8 @@ Um segundo realm, `other`, com um client de teste, fornece tokens com `iss` e ch
 **Regras gerais:**
 - A autorização roda **antes** de qualquer leitura ou escrita.
 - A busca de idempotência usa o `provider_id` do token.
+- A role `provider` só vale com a claim `provider_id` preenchida. Um token de provedor sem a claim recebe 403 `FORBIDDEN`, nunca um "provedor vazio".
+- O `app` não conhece o `auth`: a comparação do provedor e a visibilidade das consultas ficam na borda HTTP, antes de chamar o caso de uso.
 - O 403 por divergência de provedor não depende da existência do recurso, e o 404 por id opaco não revela se ele existe. Os dois caminhos evitam enumeração.
 
 **SQS:** a mensagem não carrega token. A confiança vem das credenciais e políticas do broker (D-02), e o consumidor aplica as mesmas validações de domínio do HTTP. **Limitação documentada:** em produção, cada provedor teria sua própria fila ou principal IAM, e o `providerId` seria derivado da origem da mensagem.
@@ -232,7 +246,9 @@ Um segundo realm, `other`, com um client de teste, fornece tokens com `iss` e ch
    - Encontrou e o hash é igual: devolve o resultado persistido com `idempotentReplay: true` e o status HTTP original.
    - Encontrou e o hash é diferente: 409 `IDEMPOTENCY_KEY_REUSED`.
 2. Busca por `(providerId, externalTransactionId)`. Se encontrar, é a mesma operação com outra chave: 409 `EXTERNAL_TRANSACTION_ID_CONFLICT`.
-3. Processa. Se duas requisições correrem ao mesmo tempo, a segunda viola a `UNIQUE`, faz rollback, relê e segue para o caminho 1.
+3. Processa. Se duas requisições correrem ao mesmo tempo, a segunda viola a `UNIQUE`, faz rollback, relê e segue para o caminho 1 (no máximo 3 tentativas).
+
+**Corrida entre as duas buscas** (achado da validação do plano do M3): as buscas 1 e 2 são leituras separadas, e uma entrega concorrente da mesma operação pode confirmar entre elas. Uma transação achada só pela busca 2 **com a mesma chave** é a transação da chave (caminho 1), nunca `EXTERNAL_TRANSACTION_ID_CONFLICT`.
 
 **Hash do payload:**
 - SHA-256 em hex sobre JSON canônico: chaves em ordem lexicográfica, sem espaços, strings em UTF-8.
@@ -384,7 +400,7 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
 
 - **Ledger de entrada simples, por escolha.** Saldo anterior e posterior mais a cadeia de versões bastam para auditoria e reconciliação. Partidas dobradas (diferencial opcional) exigiriam contas de contrapartida sem ganho para as garantias pedidas.
 - **Versão no ledger:** cada lançamento grava `wallet_version`, que é a versão da carteira depois da mudança, com `UNIQUE (wallet_id, wallet_version)`. Isso forma uma cadeia verificável e dá ordem estável.
-- **Paginação:** ordena por `wallet_version ASC`. O cursor é o base64url de `{"v":<últimaVersão>}` e é opaco para o cliente. O `limit` padrão é 50 e o máximo é 200.
+- **Paginação:** ordena por `wallet_version ASC`. O cursor é o base64url de `{"v":<últimaVersão>}` e é opaco para o cliente. O `limit` padrão é 50 e o máximo é 200. **Sem ajuste silencioso** (spec do M3): `limit` fora de 1–200 ou não inteiro, e `cursor` que não decodifica para `{"v":N}` com N ≥ 1, resultam em 400 `INVALID_FIELD` com `field` indicando o parâmetro. O `nextCursor` é omitido na última página.
 - **Reconciliação:**
   - roda em uma transação `REPEATABLE READ READ ONLY`, um snapshot único;
   - compara `stored` com `Σ CREDIT − Σ DEBIT` (inclui `OPENING`);
@@ -417,8 +433,8 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
 
 ## D-18 — Observabilidade ⚙️ [OBS-*]
 
-- **Logs:** slog JSON com `correlationId` (vem do header `X-Correlation-Id`, aceito só com até 128 caracteres `[A-Za-z0-9._-]`, ou é gerado; é propagado pelos eventos), `messageId`, `transactionId`, `walletId` e `providerId`. Nunca registram tokens, secrets nem o payload completo.
-- **Métricas:** `/metrics` fica na porta administrativa `:9090`, separada da API e não exposta como rota de negócio. O catálogo de métricas está no [`ARCHITECTURE.md`](../ARCHITECTURE.md) §13.2.
+- **Logs:** slog JSON com `correlationId` (vem do header `X-Correlation-Id`, aceito só com até 128 caracteres `[A-Za-z0-9._-]`, ou é gerado; é propagado pelos eventos), `messageId`, `transactionId`, `walletId` e `providerId`. Nunca registram tokens, secrets nem o payload completo. **Ordem dos middlewares HTTP** (spec do M3): correlação → log de acesso → recuperação de `panic` → fallback de rota; assim o 500 de um `panic` tem `correlationId` e entra no log de acesso.
+- **Métricas:** `/metrics` fica na porta administrativa `:9090`, separada da API e não exposta como rota de negócio. O catálogo de métricas está no [`ARCHITECTURE.md`](../ARCHITECTURE.md) §13.2. O `app` não importa Prometheus: ele declara a porta `app.Metrics`, e a `observability` a implementa. No M3 a porta tem só `ReconciliationDivergence()` (`reconciliation_divergences_total`); o M7 acrescenta os demais métodos.
 - **Readiness:** `/health/ready` faz ping no PostgreSQL e chama `GetQueueAttributes` na fila principal, com timeout de 2 s cada.
 
 ---
@@ -456,5 +472,5 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
   - as duas rotas são públicas, como o health, e podem ser desligadas com `API_DOCS_ENABLED=false` (padrão `true`).
 - **Keycloak:** os clients de teste declaram `webOrigins` com `http://localhost:8081-8083`, para que o botão *Authorize* do Swagger UI obtenha o token direto do navegador. Os segredos são os valores locais do `.env.example`.
 - **Coleção:** `api/requests.http` (REST Client do VS Code / HTTP Client do JetBrains) com o fluxo completo: token → abrir carteira → BET → replay → rejeição → reconciliação.
-- **Anti-divergência:** `getkin/kin-openapi` v0.149.0, **só nos testes**. O cliente HTTP do `testkit` valida cada requisição e cada resposta de todos os testes de integração contra o `api/openapi.yaml` (`openapi3filter`), então uma resposta fora do contrato quebra o teste. O I15 verifica o documento e a paridade entre as rotas do OpenAPI e as registradas no `ServeMux`.
+- **Anti-divergência:** `getkin/kin-openapi` v0.149.0, **só nos testes**. O cliente HTTP do `testkit` valida cada requisição e cada resposta de todos os testes de integração contra o `api/openapi.yaml` (`openapi3filter`), então uma resposta fora do contrato quebra o teste. As únicas exceções são as requisições que o teste marca como deliberadamente inválidas (I12, 415, limite de corpo) e as rotas fora do documento (404/405 de rota): nelas só a resposta é validada. O I15 é unitário e verifica o documento e a paridade entre as rotas do OpenAPI e a tabela de rotas do `httpapi`, que é a mesma que registra no `ServeMux`.
 - **Limitação:** o `/docs` precisa de internet no navegador por causa do CDN. Sem internet, basta importar o `/openapi.yaml` numa ferramenta de API ou usar o `api/requests.http`.

@@ -156,6 +156,8 @@ Detalhes: [`docs/decisions.md`](docs/decisions.md) D-09.
 - **Transições:** as transições são validadas no domínio (`ErrInvalidTransition`) e, para estados terminais, também no banco (trigger). A reidratação reconstrói o estado sem passar por transições e sem gerar eventos.
 - **Orquestração no domínio:** `wagering.Settle` avalia as regras com estado e a referência, movimenta a carteira pelo agregado (`Debit`/`Credit`) e devolve o lançamento e os eventos; `wagering.OpenWallet` faz o mesmo para a abertura. HTTP, SQS e o worker de referências chamam a mesma função, e o caso de uso só faz I/O. Cada transição valida os próprios argumentos, então nenhuma chamada direta quebra as invariantes.
 - **Classificação de falhas:** fica em um único ponto (`apperrors.Classify`), alimentado pelos adaptadores. Um erro que nenhuma camada classificou é tratado como transitório: nada é persistido e a operação pode ser reenviada depois da correção, em vez de virar um `FAILED` definitivo (D-05).
+- **Erros do domínio:** o domínio não faz I/O, então o que ele devolve é entrada inválida ou invariante quebrada. Os casos de uso passam todo erro do domínio por uma única tradução: validação vira entrada inválida, conflito de idempotência vira conflito, e qualquer outro (overflow, transição inválida, dado corrompido) vira **permanente**. Sem ela, um overflow seria tratado como transitório e reenviado para sempre.
+- **Onde o `FAILED` é gravado:** uma falha permanente a partir do lock da carteira grava a operação como `FAILED` numa **segunda** transação, sem lançamento nem eventos, e o replay devolve o mesmo 500. Se nem essa gravação for possível, a resposta é 503. Se a falha vier da leitura de idempotência (a linha já gravada com a chave não pode ser lida), não há o que gravar: a resposta é 500 `INTERNAL_ERROR`, sem registro.
 
 | Classe | Exemplos | Efeito |
 | --- | --- | --- |
@@ -176,7 +178,8 @@ Detalhes: [`docs/transaction-lifecycle.md`](docs/transaction-lifecycle.md) §1 e
 - **Fluxo:**
   1. Busca por `(provedor do token, chave)`. Se o hash for igual, devolve o **resultado persistido** com `idempotentReplay: true`; se for diferente, 409 `IDEMPOTENCY_KEY_REUSED`.
   2. Busca por `(provedor, externalTransactionId)`. Se encontrar, é a mesma operação com outra chave: 409 `EXTERNAL_TRANSACTION_ID_CONFLICT`.
-  3. Processa. Se houver corrida, a segunda requisição cai na `UNIQUE`, faz rollback e relê. A mesma verificação é repetida já sob o lock da carteira.
+  3. Processa. Se houver corrida, a segunda requisição cai na `UNIQUE`, faz rollback e relê, em até 3 tentativas. A mesma verificação é repetida já sob o lock da carteira.
+- **Corrida entre as duas buscas:** elas são leituras separadas, e uma entrega concorrente pode confirmar entre elas. Uma transação achada só pela segunda busca, **com a mesma chave**, é tratada como a da chave (replay), nunca como conflito. O teste de 50 envios paralelos da mesma aposta encontrou esse caso.
 - **Replay fiel:** a transação guarda o saldo observado no processamento (`result_balance_minor`). O replay devolve **esse** saldo e o mesmo status HTTP original, mesmo que a carteira tenha mudado depois.
 - **Hash do payload:** SHA-256 em hex sobre **JSON canônico**, com chaves em ordem lexicográfica e sem espaços.
   - **Campos:** `providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`, `kind`, `money.amount`, `money.currency` e `referenceExternalTransactionId` (omitido quando ausente).
@@ -271,10 +274,12 @@ Detalhes: [`docs/messaging.md`](docs/messaging.md) e [`docs/decisions.md`](docs/
 - Tokens `Bearer` JWT validados localmente com `go-oidc`:
   - assinatura **RS256** (qualquer outro algoritmo, inclusive `none`, é recusado);
   - chaves obtidas por **JWKS**, com cache;
-  - `iss`, `aud = pda-api` e `exp`/`nbf`, com tolerância de 30 s.
+  - `iss`, `aud = pda-api` e `exp` com tolerância de 30 s (`OIDC_CLOCK_SKEW`). O go-oidc compara o `exp` sem tolerância, então ela é aplicada atrasando o relógio do verificador; o `nbf` segue a tolerância fixa de 5 min da biblioteca.
+- **Fail fast:** o JWKS é buscado no start. Um IdP inacessível impede a subida com um erro claro, e as réplicas do compose esperam o Keycloak saudável. O Keycloak não entra no readiness, que o desafio define como PostgreSQL e SQS.
+- **Provedor sem nome:** a role `provider` só vale com a claim `provider_id`. Um token de provedor sem ela recebe 403.
 - **Issuer e URL do JWKS configurados separadamente**, porque o `iss` público (`localhost`) difere do endereço interno do Keycloak na rede do compose. O verificador busca as chaves direto do JWKS, sem discovery: de dentro da rede, o discovery devolveria um `issuer` diferente da URL consultada.
 - **A audience vem só de um mapper explícito por client.** O mapper padrão `audience resolve` do Keycloak, que poria `pda-api` em `aud` para qualquer client com roles nele, é removido do realm. Assim, a checagem de `aud` tem efeito real.
-- **Resposta 401 uniforme** (`WWW-Authenticate: Bearer error="invalid_token"`) para token ausente, inválido ou expirado, sem revelar qual foi o caso.
+- **Resposta 401 uniforme** para token inválido ou expirado (`WWW-Authenticate: Bearer realm="pda", error="invalid_token"`), sem revelar qual foi o caso. Sem token, o desafio vai sem o `error`, como pede a RFC 6750.
 
 ### 10.3 Modelo de permissões
 
@@ -405,6 +410,9 @@ Métricas auxiliares do consumidor (`sqs_messages_received_total`, `sqs_receive_
 | Indisponibilidade transitória | 503 | `problem+json` + `Retry-After` |
 
 - **Categorias de falha:** cada código é `CORRECTABLE` (corrigir a entrada), `DEFINITIVE` (resultado de negócio, e reenviar não muda nada) ou `TRANSIENT` (tentar de novo).
+- **Dois 500, distinguíveis pelo `Content-Type`:** `application/json` com `status: FAILED` é a falha permanente **registrada**; `application/problem+json` com `INTERNAL_ERROR` é um erro interno sem registro (um `panic`, por exemplo), e reenviar com a mesma chave é seguro.
+- **Uniformidade:** rota inexistente (404 `ROUTE_NOT_FOUND`) e método errado (405 `METHOD_NOT_ALLOWED`) também respondem em `problem+json`. Todo 503 traz `Retry-After: 1`. Um valor com tipo JSON errado (ex.: `"amount": 25.00`) responde com o código do campo, e o número nunca é convertido, então não passa por ponto flutuante.
+- **Correlação:** o `X-Correlation-Id` recebido (até 128 caracteres `[A-Za-z0-9._-]`) ou um gerado volta em toda resposta, vai no `correlationId` dos erros e é gravado na transação e nos eventos.
 - **Acompanhamento de pendências:** `GET /wagering/transactions/{id}` e `GET /providers/{providerId}/wagering/transactions/{extId}` devolvem a representação completa da transação, inclusive `failureCode` e, para pendências, `attempts`, `nextAttemptAt` e `expiresAt`.
 
 Detalhes: [`docs/decisions.md`](docs/decisions.md) D-04 e D-20, e o catálogo completo em [`docs/transaction-lifecycle.md`](docs/transaction-lifecycle.md) §5.
@@ -461,7 +469,7 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 
 ## 17. Trabalho não concluído
 
-*Preenchido na entrega.* Estado em 29/09/2026: **M0, M1 e M2 concluídos**. O M0 entregou o esqueleto Fx, health, métricas, compose com 3 réplicas, Keycloak provisionado, MiniStack com IAM aplicado e tooling de qualidade. O M1 entregou o domínio (Money, carteira e ledger, máquina de estados, regras por tipo, referências, hash e idempotência, eventos) e o vocabulário de erros, com a tabela U do test-plan verde. O M2 entregou a persistência: migrations com todas as constraints, triggers e grants, o Unit of Work e os repositórios, provados contra o PostgreSQL real, inclusive todos os fluxos do domínio gravados de ponta a ponta. Casos de uso, HTTP e autenticação vêm no M3. Os diferenciais opcionais (tracing com OpenTelemetry, dashboards, teste de carga e ledger de partidas dobradas) só serão feitos se houver folga ([`docs/implementation-plan.md`](docs/implementation-plan.md) M12).
+*Preenchido na entrega.* Estado em 29/09/2026: **M0 a M3 concluídos**. O M0 entregou o esqueleto Fx, health, métricas, compose com 3 réplicas, Keycloak provisionado, MiniStack com IAM aplicado e tooling de qualidade. O M1 entregou o domínio (Money, carteira e ledger, máquina de estados, regras por tipo, referências, hash e idempotência, eventos) e o vocabulário de erros, com a tabela U do test-plan verde. O M2 entregou a persistência: migrations com todas as constraints, triggers e grants, o Unit of Work e os repositórios, provados contra o PostgreSQL real, inclusive todos os fluxos do domínio gravados de ponta a ponta. O M3 entregou o contrato (`api/openapi.yaml`), os casos de uso, a autenticação com o Keycloak real e as 9 rotas, com os testes de autenticação, isolamento, contrato e concorrência em processo. Mensageria (outbox, consumidor SQS e worker de referências) vem no M4–M6. Os diferenciais opcionais (tracing com OpenTelemetry, dashboards, teste de carga e ledger de partidas dobradas) só serão feitos se houver folga ([`docs/implementation-plan.md`](docs/implementation-plan.md) M12).
 
 ---
 

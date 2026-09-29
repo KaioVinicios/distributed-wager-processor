@@ -157,6 +157,13 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | U10 | `TestDomainHasNoInfraImports`: `go list -deps ./internal/domain/...` não contém `fx`, `net/http`, `aws` nem `pgx` | DOM-07 |
 | U11 | `TestZeroValuesRejected`: `Money{}`, `Currency("")`, `Kind("")`, `Status("")`, `Wallet{}`, `WagerTransaction{}` e `LedgerEntry{}` são rejeitados pelas operações públicas. Um teste por pacote (`money`, `wallet`, `wagering`) | DOM-03 |
 | U12 | `TestReferenceRetryPolicy`: sequência de atrasos (1, 2, 4, … s, com teto de 60 s), jitter dentro de ±20% e expiração por tentativas e por TTL, inclusive quando o TTL já venceu na primeira tentativa | OPS-12, OPS-13 |
+| U13 | `TestDomainErrorKind` (`app`): todo erro que sai do domínio vira `KindPermanent`, exceto `*ValidationError` (`KindInput`), `*ConflictError` (`KindConflict`) e um `*apperrors.Error` já classificado, que sai intacto | TX-10, DOM-04 |
+| U14 | `TestLedgerCursor` (`app`): ida e volta do cursor; base64 inválido, JSON inválido, campo extra e versão < 1 → `INVALID_FIELD`/`cursor`; `limit` fora de 1–200 → `INVALID_FIELD`/`limit` | HTTP-03 |
+| U15 | `TestAuthPolicy` (`auth`): a matriz de D-07 inteira, inclusive `provider` sem `provider_id` e o `OPENING`, que não tem provedor | AUTH-04..06 |
+| U16 | `TestVerifier` (`auth`, JWKS local via `httptest`): RS256 válido aceito; assinatura de outra chave, `alg=none`, HS256, `iss` e `aud` errados e expirado além da tolerância recusados; expirado dentro da tolerância aceito; JWKS inacessível ou vazio faz o start falhar | AUTH-02, FX-02 |
+| U17 | `TestHTTPEdge` (`httpapi`, com stubs dos casos de uso): decodificação (tipo JSON errado, `MALFORMED_REQUEST`, 64 KB, dados depois do JSON), 415, `Idempotency-Key` repetida, `PROVIDER_MISMATCH`, mapeamento para status, `Retry-After`, correlação, 404/405 de rota e `panic` → 500 `INTERNAL_ERROR` | HTTP-09, D-04 |
+| U18 | `TestContract` (`testkit`): o validador que todo teste HTTP usa recusa campo fora do schema, código fora do `enum`, status não documentado e requisição fora do contrato; aceita a requisição marcada como inválida e ignora rota fora do documento | D-20, DOC-06 |
+| U19 | `TestModule`, `TestVerifierCheckKeys` (`auth`), `TestNewServerTimeouts` (`httpapi`) e `TestMetrics_ReconciliationDivergences` (`observability`): fail fast do JWKS, timeouts do servidor e a métrica da reconciliação | FX-02, OBS-03 |
 
 ### 5.2 Integração (TST-I)
 
@@ -169,7 +176,7 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | I02d | `TestTerminalTransactionImmutable`: `UPDATE` em `PROCESSED`, `REJECTED` e `FAILED` falha (`PDA02`) | TX-07 |
 | I02e | `TestGuardTriggers`: colunas imutáveis e versão da carteira (`PDA03`), colunas imutáveis da transação (`PDA02`), `DELETE` em carteira e transação, snapshot da outbox e `published_at` voltando a `NULL` (`PDA05`) | WAL-07, TX-07, OUT-01 |
 | I03a | `TestFinancialAtomicity`: uma falha **transitória** forçada no último `INSERT` da outbox (dublê de repositório) desfaz tudo: sem transação, sem ledger, sem outbox, saldo e versão intactos | TST-I03, WAL-06, OUT-02 |
-| I03b | `TestPermanentFailureRecorded`: uma falha **permanente** forçada grava `FAILED` em transação separada, sem lançamento nem alteração de saldo. O replay devolve 500 com o mesmo resultado. Pelo SQS, a inbox registra `FAILED` e a mensagem chega à DLQ com `INTERNAL_PERMANENT_FAILURE` | TX-06, SQS-07 |
+| I03b | `TestPermanentFailureRecorded`: uma falha **permanente** forçada (decorador sobre o `Repos` real que falha no `Outbox().Insert`) grava `FAILED` em transação separada, sem lançamento nem alteração de saldo. O replay devolve 500 com o mesmo resultado. Pelo SQS, a inbox registra `FAILED` e a mensagem chega à DLQ com `INTERNAL_PERMANENT_FAILURE` | TX-06, SQS-07 |
 | I04a | `TestInboxDeduplication`: a mesma mensagem enviada 2× com `MessageDeduplicationId` diferentes gera 1 transação, 1 lançamento, 1 linha na inbox e `wager_duplicates_total{layer="inbox"} = 1` | TST-I04, SQS-03, TST-C11 |
 | I04b | `TestInboxHashMismatch`: mesmo `messageId` com `data` diferente vai para a DLQ com `MESSAGE_HASH_MISMATCH` | SQS-03 |
 | I04c | `TestInvalidMessagesGoToDLQ`: JSON quebrado, `type` errado, `OPENING`, campo desconhecido e `UNKNOWN_WALLET` vão para a DLQ com o `errorCode` correto e são removidos da fila principal | SQS-07, SQS-10 |
@@ -189,21 +196,27 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | I09 | `TestLedgerPagination`: 120 lançamentos com `limit` de 50 dão 3 páginas, sem repetição nem lacuna, e o cursor é opaco | HTTP-03 |
 | I10 | `TestReplayReturnsOriginalBalance`: um BET é processado, outras operações mudam o saldo, e o replay do BET devolve o saldo original | IDEM-08 |
 | I11 | `TestReversalRules`: cenários C4 e C5 do lifecycle, REFUND/ROLLBACK de WIN e REFUND, `REVERSAL_INSUFFICIENT_FUNDS` diferente de `INSUFFICIENT_FUNDS` | OPS-04..10 |
-| I12 | `TestHTTPErrorContract`: cada linha do catálogo §5.3 do lifecycle devolve o status, o `Content-Type` e o `code` esperados | HTTP-09 |
+| I12 | `TestHTTPErrorContract`: cada linha do catálogo §5.3 do lifecycle devolve o status, o `Content-Type` e o `code` esperados. `INTERNAL_ERROR` e `TEMPORARILY_UNAVAILABLE` não são provocáveis sem sabotagem: o mapeamento deles é do U17, e o 503 real é do R01 | HTTP-09 |
 | I13 | `TestHealthChecks`: `/health/live` 200; `/health/ready` 200 com dependências e 503 com o PostgreSQL pausado | HTTP-08, OBS-04 |
 | I14 | `TestLogsHaveIdsWithoutSecrets`: logs capturados de um fluxo completo são JSON com os IDs e não contêm `Authorization`, o token nem o payload completo | OBS-01, OBS-02 |
-| I15 | `TestOpenAPIContract`: `api/openapi.yaml` passa na validação do kin-openapi, e o conjunto método + path do documento é **idêntico** ao das rotas registradas no `ServeMux`. Além disso, todo teste HTTP de integração valida requisição e resposta contra o documento (`testkit/contract.go`) | HTTP-*, DOC-06 |
+| I15 | `TestOpenAPIContract`: `api/openapi.yaml` passa na validação do kin-openapi, e o conjunto método + path do documento é **idêntico** ao da tabela de rotas do `httpapi`. É unitário (sem infraestrutura), então roda no `go test ./...`. Além disso, todo teste HTTP de integração valida requisição e resposta contra o documento (`testkit/contract.go`) | HTTP-*, DOC-06 |
 | I16 | `TestContextCancellation`: um `context` cancelado, ou com prazo vencido enquanto espera o lock de uma carteira, interrompe a operação no banco (o UoW faz rollback e devolve o erro do `context`, classificado como transitório), sem efeito parcial | DOM-06 |
 | I17 | `TestDomainFlowsPersist`: abertura, BET, WIN (com e sem referência), LOSS, REFUND, ROLLBACK de WIN, rejeição e `PENDING_REFERENCE` → `PROCESSED`, produzidos por `OpenWallet`/`Settle` e gravados pelos repositórios, passam pelos triggers e pela verificação SQL de §6 | WAL-06, LED-05, TX-09 |
 | I18 | `TestWalletRepository`, `TestOutboxRepository`, `TestInboxRepository`, `TestTransactionRepository`, `TestTransactionQueries` e `TestLedgerQueries`: ida e volta idêntica de carteira, transação, lançamento e inbox; não encontrado; `FindReference` com `AlreadyReversed`; antecipação de pendências; paginação e soma do ledger; payload da outbox igual ao envelope serializado; sentinelas das violações de unicidade | DB-01, DB-02, WAL-03, IDEM-02, SQS-03 |
 | I19 | `TestUnitOfWork`: commit, rollback em erro e em `panic`, `lock_timeout` com a carteira travada por outra transação → transitório, `Snapshot` somente leitura | DB-02, CONC-01 (D-09) |
+| I20 | `TestOpenWallet` (`app`): saldo positivo grava carteira v1, `OPENING`, crédito e os 2 eventos; saldo zero grava só a carteira; segunda abertura → `WALLET_ALREADY_EXISTS`; entradas inválidas com código e `field` | HTTP-01, WAL-03 |
+| I21 | `TestProcessWager` (`app`): todos os desfechos, replay com o saldo original, os dois 409, `UNKNOWN_WALLET` sem escrita, antecipação das pendências quando a referência chega e `FAILED` por overflow de crédito | HTTP-06, IDEM-05..08, TX-06 |
+| I22 | `TestProcessWagerRaces` (`app`): a mesma chave em duas carteiras, em paralelo, com barreira de largada: uma processa, a outra termina em 409 depois da releitura, sem escrita parcial Também a mesma chave confirmada entre as duas leituras de idempotência (decorador que esconde a linha da primeira): replay, nunca 409; e o limite de 3 tentativas por corrida | IDEM-07, CONC-03 |
+| I23 | `TestQueries`, `TestListLedger` e `TestReconcile` (`app`): leituras com 404 também para id malformado, paginação estrita (`limit` e `cursor` recusados antes da leitura da carteira) e reconciliação com divergência forçada (triggers desligados só dentro da transação do owner, sob `ACCESS EXCLUSIVE`) | HTTP-02..05, HTTP-07 |
+| I24 | `TestOpenWalletAPI`, `TestLedgerAPI`, `TestHappyPathFlow` e `TestHarness` (`test/integration`): abertura, leituras, o fluxo do "pronto quando" e o app em processo respondendo pelo contrato | HTTP-01..06, DOC-06 |
+| — | `TestOutboxProblemsDetectsDivergence` (`postgres`, banco próprio, triggers desligados): sensibilidade do item 7 do §6, cada divergência da matriz do lifecycle §7 é reportada | TST-C09 |
 
 ### 5.3 Autenticação e autorização (TST-A)
 
 | ID | Teste | Cobre |
 | --- | --- | --- |
 | A01a | `TestAuthRealIdP`: um token real de `provider-a` via `client_credentials` é aceito | TST-A01, AUTH-01, AUTH-03 |
-| A01b | `TestAuthRejects`: devolvem 401 sem token, token malformado, assinatura forjada (chave RSA gerada no teste), `alg=none`, `aud` errado (client `no-audience-client`), token do realm `other` (`iss` e chaves diferentes) e token expirado (de `provider-short-lived`, depois de 6 s) | TST-A01, AUTH-02, E1 |
+| A01b | `TestAuthRejects`: devolvem 401 sem token, token malformado, assinatura forjada (chave RSA gerada no teste), `alg=none`, `aud` errado (client `no-audience-client`), token do realm `other` (`iss` e chaves diferentes) e token expirado (de `provider-short-lived`, com 5 s de vida; os testes usam `OIDC_CLOCK_SKEW=1s` e esperam cerca de 7 s) | TST-A01, AUTH-02, E1 |
 | A02a | `TestProviderIsolationQueries`: `provider-b` recebe 404 em `GET /wagering/transactions/{id de A}`, e 403 em `GET /providers/provider-a/...` | TST-A02, AUTH-05, E2 |
 | A02b | `TestProviderIsolationReplay`: `provider-b` envia o corpo de A com a chave de A. Resultado: 403 `PROVIDER_MISMATCH`, e a resposta não contém nenhum dado de A | TST-A02, AUTH-04, AUTH-05 |
 | A02c | `TestInternalOperationsRestricted`: tokens de provedor e de `no-role-client` recebem 403 em todas as rotas `/wallets*`, e `wallet-service` recebe 403 em `POST /wagering/transactions` | TST-A02, AUTH-06 |
@@ -212,7 +225,7 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 
 ### 5.4 Concorrência e recuperação (TST-C) — e2e com 3 instâncias
 
-Todos rodam com `cluster.Start(3)`, distribuindo as requisições entre as instâncias em round-robin, a menos que o teste indique outra coisa.
+Todos rodam com `cluster.Start(3)`, distribuindo as requisições entre as instâncias em round-robin, a menos que o teste indique outra coisa. O C01a e o C02 também rodam **em processo** desde o M3 (`test/integration/`), como verificação antecipada do E4 e do E5 pelo HTTP.
 
 | ID | Teste | Procedimento | Asserções | Cobre |
 | --- | --- | --- | --- | --- |
@@ -258,7 +271,7 @@ Registrada automaticamente para toda carteira criada via `testkit`. Executada no
 4. `wallets.version == max(wallet_version)` do ledger, ou `1` se não houver lançamentos.
 5. Não existem lançamentos para transações `REJECTED`, `FAILED`, `PENDING_REFERENCE` ou `LOSS`.
 6. Cada transação `PROCESSED` com movimento tem exatamente 1 lançamento.
-7. Toda transação terminal tem o evento correspondente na outbox, conforme a matriz do lifecycle §7.
+7. Toda transação terminal tem exatamente os eventos da matriz do lifecycle §7 na outbox (`testkit.OutboxProblems`, SQL, com teste de sensibilidade como o do `LedgerProblems`).
 
 ---
 

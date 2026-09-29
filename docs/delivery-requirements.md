@@ -64,18 +64,18 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 2. Autenticação e autorização (§2)
 
-- [ ] **AUTH-01** ⛔ Integração com um IdP externo OAuth 2.0/OIDC (Keycloak recomendado) executando no Docker Compose. Cadastro de senhas e emissão própria de tokens ficam fora do escopo.
+- [x] **AUTH-01** ⛔ Integração com um IdP externo OAuth 2.0/OIDC (Keycloak recomendado) executando no Docker Compose. Cadastro de senhas e emissão própria de tokens ficam fora do escopo. *(M3, 29/09: A01a `TestAuthRealIdP` contra o Keycloak do compose, com o realm importado.)*
   *Evidência:* container do IdP no compose e teste de integração obtendo um token real.
-- [ ] **AUTH-02** ⛔ Validação completa do token: assinatura via JWKS, `iss`, `aud`, `exp`/`nbf` e algoritmo permitido. Credencial ausente, inválida ou expirada resulta em rejeição.
+- [x] **AUTH-02** ⛔ Validação completa do token: assinatura via JWKS, `iss`, `aud`, `exp`/`nbf` e algoritmo permitido. Credencial ausente, inválida ou expirada resulta em rejeição. *(M3, 29/09: A01b `TestAuthRejects` (sem token, malformado, assinatura forjada, `alg=none`, HS256, `aud` errado, outro realm, expirado); U16 `TestVerifier`; fail fast do JWKS em `TestFxFailFast` e `TestModule`.)*
   *Evidência:* TST-A01.
-- [ ] **AUTH-03** Fluxo `client_credentials` para a comunicação entre serviços.
-- [ ] **AUTH-04** ⛔ O `providerId` autorizado vem da identidade autenticada, nunca apenas do corpo da requisição. Divergência entre token e corpo é rejeitada.
-- [ ] **AUTH-05** ⛔ Provedores acessam apenas suas próprias transações, inclusive em replays e consultas (`GET /wagering/transactions/:id` e `GET /providers/:providerId/...`).
-- [ ] **AUTH-06** ⛔ Operações de carteira (abertura, leitura, ledger, reconciliação) ficam restritas ao serviço interno.
-- [ ] **AUTH-07** ⛔ Um acesso não autorizado não produz efeito financeiro nem expõe dados. A autorização acontece antes de qualquer escrita ou consulta de idempotência.
-- [ ] **AUTH-08** `GET /health/live` e `GET /health/ready` são públicos.
+- [x] **AUTH-03** Fluxo `client_credentials` para a comunicação entre serviços. *(M3, 29/09: `TestAuthRealIdP` e todos os testes da API usam tokens reais de `client_credentials` (`testkit.Token`).)*
+- [x] **AUTH-04** ⛔ O `providerId` autorizado vem da identidade autenticada, nunca apenas do corpo da requisição. Divergência entre token e corpo é rejeitada. *(M3, 29/09: A02b `TestProviderIsolationReplay`; `TestSubmitWagerHandler` (`PROVIDER_MISMATCH` antes do caso de uso); U15 `TestAuthPolicy`.)*
+- [x] **AUTH-05** ⛔ Provedores acessam apenas suas próprias transações, inclusive em replays e consultas (`GET /wagering/transactions/:id` e `GET /providers/:providerId/...`). *(M3, 29/09: A02a `TestProviderIsolationQueries` (404 por id, 403 no path), A02b `TestProviderIsolationReplay`; `TestTransactionReadHandlers`.)*
+- [x] **AUTH-06** ⛔ Operações de carteira (abertura, leitura, ledger, reconciliação) ficam restritas ao serviço interno. *(M3, 29/09: A02c `TestInternalOperationsRestricted`; `TestEdgeAuthentication`.)*
+- [x] **AUTH-07** ⛔ Um acesso não autorizado não produz efeito financeiro nem expõe dados. A autorização acontece antes de qualquer escrita ou consulta de idempotência. *(M3, 29/09: A03 `TestUnauthorizedHasNoEffects` (contagem de todas as tabelas antes e depois); a autorização roda antes do caso de uso.)*
+- [x] **AUTH-08** `GET /health/live` e `GET /health/ready` são públicos. *(M3, 29/09: A04 `TestPublicEndpoints` (só health e docs sem token); `TestEdgeAuthentication`.)*
 - [~] **AUTH-09** O acesso à mensageria é controlado por credenciais e políticas do broker, e o consumidor continua aplicando as validações de domínio. *(M0, 29/09: M0: MiniStack `AUTH=true`, usuários IAM com políticas de identidade; `TestProvisioning` prova uma permissão e uma negação. Matriz completa no I04f (M5).)*
-- [ ] **AUTH-10** A escolha do IdP, a validação de credenciais e o modelo de permissões estão justificados no `ARCHITECTURE.md`.
+- [x] **AUTH-10** A escolha do IdP, a validação de credenciais e o modelo de permissões estão justificados no `ARCHITECTURE.md`. *(M3, 29/09: `ARCHITECTURE.md` §10.)*
 
 ---
 
@@ -104,7 +104,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [x] **DOM-03** Valores de domínio não inicializados ou inválidos são rejeitados. *(M1, 29/09: `TestZeroValuesRejected` (money, wallet, wagering), `TestParseEnums`, `TestParse` (ident).)*
 - [x] **DOM-04** Erros de domínio classificáveis por tipo ou por `errors.Is`/`errors.As`. *(M1, 29/09: erros sentinela e `*ValidationError`/`*ConflictError` verificados com `errors.Is/As`; `TestClassify`.)*
 - [x] **DOM-05** Nenhum `panic` representa rejeição de negócio. *(M1, 29/09: `FuzzParseMoney`; rejeições são estados (`TestKindRules`), nunca `panic`.)*
-- [ ] **DOM-06** Toda operação de I/O recebe `context.Context` e respeita cancelamento e timeout.
+- [~] **DOM-06** Toda operação de I/O recebe `context.Context` e respeita cancelamento e timeout. *(M3, 29/09: os casos de uso recebem e respeitam o `ctx`; I16 (M2). Consumidor e workers nos M5–M6.)*
 - [x] **DOM-07** O domínio não depende de Fx, HTTP, SQS nem de bibliotecas de persistência. *(M1, 29/09: U10 `TestDomainHasNoInfraImports` + `depguard`.)*
   *Evidência:* teste que verifica os imports do pacote de domínio (ex.: `go list -deps`) ou regra de lint.
 
@@ -173,39 +173,39 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 9. Idempotência (§5.2, §9)
 
-- [ ] **IDEM-01** ⛔ A idempotência é persistente e sobrevive ao reinício de todos os processos.
-- [~] **IDEM-02** O header `Idempotency-Key` é obrigatório no HTTP. O servidor não substitui silenciosamente a chave recebida. *(M2, 29/09: unicidade `(provider_id, idempotency_key)`: `TestConstraints`, `TestTransactionQueries`. O header é do M3.)*
+- [~] **IDEM-01** ⛔ A idempotência é persistente e sobrevive ao reinício de todos os processos. *(M3, 29/09: idempotência persistida e usada pelo HTTP (`TestProcessWager`, `TestSameBet50xHTTP`). O reinício de todos os processos é o I06/C08.)*
+- [x] **IDEM-02** O header `Idempotency-Key` é obrigatório no HTTP. O servidor não substitui silenciosamente a chave recebida. *(M2, 29/09: unicidade `(provider_id, idempotency_key)`: `TestConstraints`, `TestTransactionQueries`. O header é do M3.)* *(M3, 29/09: I12 (`MISSING_IDEMPOTENCY_KEY`, `INVALID_IDEMPOTENCY_KEY`); `TestSubmitWagerHandler` (chave repetida, a chave recebida vai intacta ao comando).)*
 - [x] **IDEM-03** Hash determinístico dos campos de negócio em JSON canônico com chaves ordenadas. A chave e os metadados de transporte ficam fora do cálculo. Algoritmo, campos e normalizações estão documentados. *(M1, 29/09: `TestPayloadHashGolden` (SHA calculado com `shasum`).)*
-- [~] **IDEM-04** O hash é equivalente entre HTTP e SQS para a mesma operação. *(M1, 29/09: `TestPayloadHashHTTPEqualsSQS` sobre a entrada do domínio. Faltam o DTO e o envelope reais (M3/M5).)*
+- [~] **IDEM-04** O hash é equivalente entre HTTP e SQS para a mesma operação. *(M1, 29/09: `TestPayloadHashHTTPEqualsSQS` sobre a entrada do domínio. Faltam o DTO e o envelope reais (M3/M5).)* *(M3, 29/09: `TestSubmitWagerHandler` (o hash do DTO HTTP é o do comando do domínio). O envelope SQS é do M5.)*
 - [x] **IDEM-05** Mesma chave e mesmo conteúdo: devolve o resultado persistido com `idempotentReplay: true`. *(M1, 29/09: `TestIdempotencyDecision`.)*
 - [x] **IDEM-06** Mesma chave com conteúdo diferente: conflito. *(M1, 29/09: `TestIdempotencyDecision`.)*
 - [x] **IDEM-07** ⛔ `(providerId, externalTransactionId)` não pode ser reaplicado usando outra chave. *(M1, 29/09: `TestIdempotencyDecision`.)* *(M2, 29/09: `wager_tx_external_id_uq`: `TestConstraints`, `TestTransactionQueries` (`ErrIdempotencyRace`).)*
-- [ ] **IDEM-08** O replay de uma operação concluída devolve o saldo observado no processamento original.
+- [x] **IDEM-08** O replay de uma operação concluída devolve o saldo observado no processamento original. *(M3, 29/09: I10 `TestReplayReturnsOriginalBalance`; I21 `TestProcessWager`.)*
 
 ---
 
 ## 10. Concorrência (§5.6, §5.7, §8)
 
-- [ ] **CONC-01** ⛔ Coordenação por carteira. Locks globais são proibidos (nada de lock de tabela ou advisory lock único).
-- [ ] **CONC-02** Estratégia escolhida (pessimista, otimista com retry limitado, update condicional ou combinação) justificada.
-- [ ] **CONC-03** ⛔ As invariantes financeiras valem no banco, independentemente de locks locais e da deduplicação do SQS FIFO.
+- [x] **CONC-01** ⛔ Coordenação por carteira. Locks globais são proibidos (nada de lock de tabela ou advisory lock único). *(M3, 29/09: O lock é só da linha da carteira (I19, M2); `TestTwoBetsCompete` falha sem o `FOR UPDATE` (sensibilidade).)*
+- [x] **CONC-02** Estratégia escolhida (pessimista, otimista com retry limitado, update condicional ou combinação) justificada. *(M3, 29/09: `ARCHITECTURE.md` §4 e D-09.)*
+- [x] **CONC-03** ⛔ As invariantes financeiras valem no banco, independentemente de locks locais e da deduplicação do SQS FIFO. *(M3, 29/09: `TestTwoBetsCompete` (20 disputas); I22 `TestProcessWagerRaces`; o `CHECK` do saldo (I02a, M2).)*
 - [ ] **CONC-04** ⛔ Garantias demonstradas com **≥ 3 processos independentes**, cada um com suas conexões e memória.
-- [ ] **CONC-05** Uma carteira com 100.00 BRL recebe duas apostas simultâneas de 80.00. Resultado esperado: 1 `PROCESSED`, 1 `REJECTED` por saldo insuficiente, saldo final 20.00 e 1 débito no ledger. Reenvios não alteram esse resultado.
+- [x] **CONC-05** Uma carteira com 100.00 BRL recebe duas apostas simultâneas de 80.00. Resultado esperado: 1 `PROCESSED`, 1 `REJECTED` por saldo insuficiente, saldo final 20.00 e 1 débito no ledger. Reenvios não alteram esse resultado. *(M3, 29/09: C02 `TestTwoBetsCompete` em processo (20 repetições, reenvios idênticos); o C02 com 3 processos vem no M8.)*
 - [ ] **CONC-06** Carteiras diferentes são processadas em paralelo.
 
 ---
 
 ## 11. API HTTP (§9)
 
-- [ ] **HTTP-01** `POST /wallets`: segue o contrato do desafio. Com saldo inicial positivo, carteira + `OPENING` `PROCESSED` + lançamento de crédito + outbox (`WagerTransactionProcessed` e `WalletBalanceChanged`) entram no mesmo commit, com versão `1`. Com saldo zero, não há `OPENING`, ledger nem eventos financeiros. Uma carteira duplicada resulta em conflito.
-- [ ] **HTTP-02** `GET /wallets/:walletId`.
-- [ ] **HTTP-03** `GET /wallets/:walletId/ledger?cursor=...&limit=50`: cursor opaco, ordenação estável e limite máximo definido.
-- [ ] **HTTP-04** `GET /wagering/transactions/:transactionId`: mostra pendências e códigos de rejeição/falha.
-- [ ] **HTTP-05** `GET /providers/:providerId/wagering/transactions/:externalTransactionId`.
-- [ ] **HTTP-06** `POST /wagering/transactions`: segue o contrato do desafio (`transactionId`, `status`, `balance`, `idempotentReplay`).
-- [ ] **HTTP-07** `POST /wallets/:walletId/reconciliation`: reconstrói o saldo a partir do ledger (incluindo a abertura) em uma visão consistente (snapshot) e devolve `difference = stored − calculated`. Divergências aparecem na resposta, no log e em uma métrica. **Não altera o saldo.**
+- [x] **HTTP-01** `POST /wallets`: segue o contrato do desafio. Com saldo inicial positivo, carteira + `OPENING` `PROCESSED` + lançamento de crédito + outbox (`WagerTransactionProcessed` e `WalletBalanceChanged`) entram no mesmo commit, com versão `1`. Com saldo zero, não há `OPENING`, ledger nem eventos financeiros. Uma carteira duplicada resulta em conflito. *(M3, 29/09: `TestOpenWalletAPI`; I20 `TestOpenWallet`; `TestOpenWalletHandler`.)*
+- [x] **HTTP-02** `GET /wallets/:walletId`. *(M3, 29/09: `TestOpenWalletAPI`; `TestQueries`.)*
+- [x] **HTTP-03** `GET /wallets/:walletId/ledger?cursor=...&limit=50`: cursor opaco, ordenação estável e limite máximo definido. *(M3, 29/09: I09 `TestLedgerPagination` (120 lançamentos, 3 páginas, cursor opaco); `TestLedgerAPI`; U14 `TestLedgerCursor`.)*
+- [x] **HTTP-04** `GET /wagering/transactions/:transactionId`: mostra pendências e códigos de rejeição/falha. *(M3, 29/09: `TestHappyPathFlow`; `TestReversalRules` (pendência com `attempts`, `nextAttemptAt`, `expiresAt`); `TestTransactionReadHandlers`.)*
+- [x] **HTTP-05** `GET /providers/:providerId/wagering/transactions/:externalTransactionId`. *(M3, 29/09: `TestHappyPathFlow`; `TestTransactionReadHandlers`.)*
+- [x] **HTTP-06** `POST /wagering/transactions`: segue o contrato do desafio (`transactionId`, `status`, `balance`, `idempotentReplay`). *(M3, 29/09: `TestHappyPathFlow`; I21 `TestProcessWager`; `TestSubmitWagerHandler`.)*
+- [x] **HTTP-07** `POST /wallets/:walletId/reconciliation`: reconstrói o saldo a partir do ledger (incluindo a abertura) em uma visão consistente (snapshot) e devolve `difference = stored − calculated`. Divergências aparecem na resposta, no log e em uma métrica. **Não altera o saldo.** *(M3, 29/09: I08 `TestReconciliation` (divergência na resposta, no log e em `reconciliation_divergences_total`, sem alterar o saldo); `TestReconcile`.)*
 - [x] **HTTP-08** `GET /health/live` (processo) e `GET /health/ready` (PostgreSQL + SQS). *(M0, 29/09: `health_test`, `health_handler_test` e I07b `TestFxLifecycle` (PostgreSQL + SQS).)*
-- [ ] **HTTP-09** Códigos HTTP e corpos de resposta documentados e **distinguíveis** para: entrada inválida, conflito, rejeição de negócio, processamento pendente e indisponibilidade transitória.
+- [x] **HTTP-09** Códigos HTTP e corpos de resposta documentados e **distinguíveis** para: entrada inválida, conflito, rejeição de negócio, processamento pendente e indisponibilidade transitória. *(M3, 29/09: I12 `TestHTTPErrorContract`; U17 `TestWriteError`; I15 `TestOpenAPIContract`.)*
 
 ---
 
@@ -255,7 +255,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 15. Composição e ciclo de vida com Uber Fx (§4)
 
-- [~] **FX-01** Configuração, conexões, repositórios, casos de uso, handlers e workers compostos com `fx.Module`, `fx.Provide` e `fx.Invoke`, com injeção por construtor. *(M0, 29/09: M0: `config`, `observability`, `postgres`, `aws` e `httpapi` com `fx.Module`/`Provide`/`Invoke`; I07a `TestFxGraph`. Completa no M3–M6.)*
+- [~] **FX-01** Configuração, conexões, repositórios, casos de uso, handlers e workers compostos com `fx.Module`, `fx.Provide` e `fx.Invoke`, com injeção por construtor. *(M0, 29/09: M0: `config`, `observability`, `postgres`, `aws` e `httpapi` com `fx.Module`/`Provide`/`Invoke`; I07a `TestFxGraph`. Completa no M3–M6.)* *(M3, 29/09: `TestFxGraph` com `auth`, `app` e o `httpapi` completo. Workers nos M4–M6.)*
 - [x] **FX-02** A inicialização valida a configuração e as dependências (fail fast). *(M0, 29/09: I07c `TestFxFailFast` (banco inacessível, fila inexistente, config inválida); `config_test`; `ServeOnLifecycle` com porta ocupada.)*
 - [ ] **FX-03** Workers com cancelamento, prazos de execução e término observável.
 - [ ] **FX-04** O shutdown interrompe novas entradas e conclui ou libera o trabalho em andamento.
@@ -266,7 +266,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 ## 16. Observabilidade (§12)
 
 - [ ] **OBS-01** Logs em JSON com `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId`, quando disponíveis.
-- [ ] **OBS-02** Logs sem credenciais, dados sensíveis ou payloads financeiros completos.
+- [~] **OBS-02** Logs sem credenciais, dados sensíveis ou payloads financeiros completos. *(M3, 29/09: `TestEdgeAccessLog` (sem token), `problem+json` sem ecoar valores. A prova completa é o I14 (M7).)*
 - [ ] **OBS-03** Métricas de: resultados por status, duplicatas, retries, DLQ, conflitos de concorrência, atraso da outbox, latência de processamento e divergências de reconciliação.
 - [x] **OBS-04** Health checks (HTTP-08). *(M0, 29/09: ver HTTP-08.)*
 - [ ] **OBS-05** ⭐ Tracing com OpenTelemetry e dashboards.
@@ -288,7 +288,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 - [ ] **TST-I01** Migrations: `up` e `down`.
 - [ ] **TST-I02** Constraints e imutabilidade do ledger.
-- [ ] **TST-I03** Atomicidade financeira.
+- [x] **TST-I03** Atomicidade financeira. *(M3, 29/09: I03a `TestFinancialAtomicity` (M2) e I03b `TestPermanentFailureRecorded` (`FAILED` em UoW separada, replay com 500).)*
 - [ ] **TST-I04** Inbox e reentrega.
 - [ ] **TST-I05** Outbox concorrente, retry e DLQ.
 - [ ] **TST-I06** Recuperação após reinicialização.
@@ -296,14 +296,14 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ### 17.3 Autenticação e autorização
 
-- [ ] **TST-A01** ⛔ Integração real com o IdP. Credenciais ausentes, inválidas e expiradas são rejeitadas.
-- [ ] **TST-A02** ⛔ Isolamento entre provedores em consultas e replays, e restrição das operações internas.
-- [ ] **TST-A03** ⛔ Acessos não autorizados não geram efeito financeiro nem expõem dados.
+- [x] **TST-A01** ⛔ Integração real com o IdP. Credenciais ausentes, inválidas e expiradas são rejeitadas. *(M3, 29/09: `TestAuthRealIdP` e `TestAuthRejects`.)*
+- [x] **TST-A02** ⛔ Isolamento entre provedores em consultas e replays, e restrição das operações internas. *(M3, 29/09: `TestProviderIsolationQueries`, `TestProviderIsolationReplay` e `TestInternalOperationsRestricted`.)*
+- [x] **TST-A03** ⛔ Acessos não autorizados não geram efeito financeiro nem expõem dados. *(M3, 29/09: `TestUnauthorizedHasNoEffects`.)*
 
 ### 17.4 Concorrência e recuperação
 
-- [ ] **TST-C01** A mesma aposta enviada 50× em paralelo gera um único débito.
-- [ ] **TST-C02** Disputa 100.00 vs 2× 80.00 (CONC-05).
+- [~] **TST-C01** A mesma aposta enviada 50× em paralelo gera um único débito. *(M3, 29/09: C01a `TestSameBet50xHTTP` em processo. Com 3 processos no M8.)*
+- [~] **TST-C02** Disputa 100.00 vs 2× 80.00 (CONC-05). *(M3, 29/09: C02 `TestTwoBetsCompete` em processo. Com 3 processos no M8.)*
 - [ ] **TST-C03** Carteiras distintas processadas simultaneamente.
 - [ ] **TST-C04** Cenários relevantes repetidos com **≥ 3 instâncias independentes**.
 - [ ] **TST-C05** Consumidor interrompido depois do commit e antes do `DeleteMessage`: a reentrega é tratada corretamente.
@@ -328,7 +328,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [~] **DOC-03** O `ARCHITECTURE.md` explicita limitações, interpretações adotadas e trabalho não concluído. *(Interpretações e limitações escritas em 28/09; trabalho não concluído é fechado na entrega.)*
 - [ ] **DOC-04** Há um documento separado sobre como preparar as dependências dos testes e executar a integração, as múltiplas instâncias e as simulações de falha, incluindo build tags, se usadas.
 - [ ] **DOC-05** Há instruções para executar os fluxos autenticados com as identidades de teste provisionadas.
-- [ ] **DOC-06** ⭐ Contrato OpenAPI (`api/openapi.yaml`) servido em `/openapi.yaml`, Swagger UI autenticável em `/docs` e coleção `api/requests.http`, com o contrato validado nos testes (D-20).
+- [x] **DOC-06** ⭐ Contrato OpenAPI (`api/openapi.yaml`) servido em `/openapi.yaml`, Swagger UI autenticável em `/docs` e coleção `api/requests.http`, com o contrato validado nos testes (D-20). *(M3, 29/09: `api/openapi.yaml`, `/docs`, `/openapi.yaml` e `api/requests.http`; I15 `TestOpenAPIContract`; `TestContract` (o validador do `testkit`); `TestEdgeDocs`.)*
 
 ### 18.1 Onde cada exigência de documentação é atendida
 

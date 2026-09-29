@@ -87,16 +87,18 @@ pda/
 │   │   └── classify_test.go                # U09a
 │   │
 │   ├── app/                                # casos de uso + portas (SEM fx, net/http, aws, pgx)
-│   │   ├── ports.go                        # UnitOfWork, Repos, WalletRepo... (M2); Clock, IDGenerator (M3)
-│   │   ├── errors.go                       # ErrNotFound, ErrWalletAlreadyExists, ErrIdempotencyRace...
+│   │   ├── ports.go                        # UnitOfWork, Repos, WalletRepo... (M2); Clock, IDGenerator, Metrics (M3)
+│   │   ├── errors.go                       # sentinelas (M2) + domainError: erro do domínio → Kind (M3)
+│   │   ├── system.go                       # SystemClock e UUIDv7 (implementações padrão das portas)
+│   │   ├── seal.go                         # sealEvents: eventos do domínio → envelopes com eventId
 │   │   ├── open_wallet.go
 │   │   ├── process_wager.go                # caso de uso único para HTTP, SQS e worker (lifecycle §6)
 │   │   ├── resolve_references.go           # passo do worker (claim → reavaliação)
 │   │   ├── queries.go                      # GetWallet, ListLedger, GetTransaction, GetByExternalID
 │   │   ├── reconcile.go
 │   │   ├── cursor.go                       # cursor opaco do ledger (base64url)
-│   │   ├── fakes_test.go                   # UoW e repositórios em memória (apenas testes unitários)
-│   │   └── *_test.go
+│   │   ├── *_test.go                       # unitários das partes puras (domainError, cursor)
+│   │   └── *_integration_test.go           # casos de uso contra o PostgreSQL real, sem fakes (I20–I22, I03b)
 │   │
 │   ├── auth/
 │   │   ├── verifier.go                     # go-oidc: issuer, JWKS URL separada, aud, RS256
@@ -122,8 +124,9 @@ pda/
 │   │   │   └── *_integration_test.go       # I01–I03, I16–I19 (//go:build integration)
 │   │   ├── httpapi/
 │   │   │   ├── server.go                   # http.Server + lifecycle (Shutdown)
-│   │   │   ├── routes.go                   # ServeMux com padrões "METHOD /path/{id}"
-│   │   │   ├── middleware.go               # recover, correlação, log de acesso, auth, limite de corpo
+│   │   │   ├── routes.go                   # tabela única de rotas: registra no ServeMux e alimenta o I15
+│   │   │   ├── handler.go                  # Services (interfaces pequenas dos casos de uso), Options, handlers
+│   │   │   ├── middleware.go               # correlação, log de acesso, recover, fallback 404/405, auth, corpo JSON
 │   │   │   ├── wallets_handler.go
 │   │   │   ├── wagering_handler.go
 │   │   │   ├── health_handler.go
@@ -158,7 +161,7 @@ pda/
 │   │
 │   ├── observability/
 │   │   ├── logger.go                       # slog JSON + helpers de atributos (IDs)
-│   │   ├── metrics.go                      # registro Prometheus e catálogo de métricas
+│   │   ├── metrics.go                      # registro Prometheus e catálogo; implementa app.Metrics (fx.As no bootstrap)
 │   │   ├── health.go                       # agregador de checkers (value group Fx); os checkers vêm dos adaptadores
 │   │   ├── httpserver.go                   # ServeOnLifecycle: Listen síncrono no OnStart, Shutdown no OnStop (API e admin)
 │   │   ├── admin_server.go                 # :9090 /metrics
@@ -197,7 +200,8 @@ pda/
 │
 ├── test/
 │   ├── testkit/                            # utilitários compartilhados (sem build tag)
-│   │   ├── env.go                          # NewEnv: banco (M2) e filas (M4/M5) isolados por pacote (test-plan §3.2)
+│   │   ├── env.go                          # NewEnv: banco isolado por pacote (M2); filas e tópico entram pelo app e pelo M4
+│   │   ├── app.go                          # StartApp: Fx em processo com filas isoladas, logs capturados e cliente por identidade (M3)
 │   │   ├── root.go                         # RepoRoot: raiz do módulo (go.mod)
 │   │   ├── dotenv.go                       # lê .env.example (+ .env) para os testes
 │   │   ├── awscreds.go                     # lê .local/aws/credentials (profiles IAM do aws-init)
@@ -208,7 +212,7 @@ pda/
 │   │   ├── api.go                          # cliente HTTP tipado
 │   │   ├── contract.go                     # validação de req/resp contra api/openapi.yaml (kin-openapi)
 │   │   ├── sqs.go                          # envio de mensagens, leitura de DLQ e auditoria
-│   │   ├── assert.go                       # AssertWalletConsistent, SnapshotCounts, Eventually
+│   │   ├── assert.go                       # AssertWalletConsistent (test-plan §6), OutboxProblems, SnapshotCounts, Eventually
 │   │   └── cluster.go                      # N processos do binário (e2e)
 │   ├── integration/                        # //go:build integration — cenários entre componentes
 │   ├── e2e/                                # //go:build e2e — multi-instância, falhas, resiliência

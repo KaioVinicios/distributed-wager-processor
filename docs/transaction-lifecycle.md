@@ -79,8 +79,8 @@ A ordem é fixa, para que o `failureCode` seja **determinístico**: a mesma entr
 
 ### 3.1 Sem estado (antes de qualquer I/O de domínio; resulta em 400 e não é persistido)
 
-1. JSON bem formado, sem campos desconhecidos (`DisallowUnknownFields`) e corpo de até 64 KB.
-2. `Idempotency-Key` presente, com 1 a 255 caracteres ASCII visíveis, `^[\x21-\x7E]{1,255}$` (só HTTP; no SQS, é `data.idempotencyKey`).
+1. JSON bem formado, sem campos desconhecidos (`DisallowUnknownFields`) e corpo de até 64 KB. Um valor com tipo JSON errado (ex.: `"amount": 25.00`) é detectado aqui e responde com o código do próprio campo (`INVALID_AMOUNT`, `INVALID_CURRENCY`, `INVALID_KIND` ou `INVALID_FIELD`); `null` equivale a ausente.
+2. `Idempotency-Key` presente, uma única vez, com 1 a 255 caracteres ASCII visíveis, `^[\x21-\x7E]{1,255}$` (só HTTP; no SQS, é `data.idempotencyKey`).
 3. Campos obrigatórios presentes; `playerId` e `walletId` são UUIDs válidos; `providerId`, `externalTransactionId`, `roundId` e `gameId` têm de 1 a 128 caracteres.
 4. `kind` válido, e `OPENING` é rejeitado.
 5. `money`: formato estrito (D-03) e moeda suportada.
@@ -93,7 +93,7 @@ A ordem é fixa, para que o `failureCode` seja **determinístico**: a mesma entr
 
 ### 3.3 Idempotência (D-08)
 
-9. Busca por `(providerId, idempotencyKey)`, seguida da busca por `(providerId, externalTransactionId)`. O resultado é replay ou 409.
+9. Busca por `(providerId, idempotencyKey)`, seguida da busca por `(providerId, externalTransactionId)`. O resultado é replay ou 409. Uma transação achada só pela segunda busca com a **mesma chave** confirmou entre as duas leituras: é replay (D-08).
 
 ### 3.4 Com estado (dentro da transação SQL, com a carteira travada)
 
@@ -198,11 +198,14 @@ A transação é gravada como `FAILED` em uma transação SQL **separada**, sem 
 | 403 | `PROVIDER_MISMATCH` | CORRECTABLE | O `providerId` do corpo ou do path difere do token |
 | 404 | `WALLET_NOT_FOUND` | CORRECTABLE | `GET/POST /wallets/:id…` inexistente |
 | 404 | `TRANSACTION_NOT_FOUND` | CORRECTABLE | Transação inexistente **ou de outro provedor** |
+| 404 | `ROUTE_NOT_FOUND` | CORRECTABLE | Caminho que não existe na API |
+| 405 | `METHOD_NOT_ALLOWED` | CORRECTABLE | Método não aceito pelo caminho (header `Allow`) |
 | 409 | `IDEMPOTENCY_KEY_REUSED` | CORRECTABLE | Mesma chave com hash diferente |
 | 409 | `EXTERNAL_TRANSACTION_ID_CONFLICT` | CORRECTABLE | `(providerId, externalTransactionId)` já registrado com outra chave |
 | 409 | `WALLET_ALREADY_EXISTS` | DEFINITIVE | Já existe carteira para o par `(playerId, currency)` |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | CORRECTABLE | `Content-Type` diferente de `application/json` |
-| 503 | `TEMPORARILY_UNAVAILABLE` | TRANSIENT | PostgreSQL ou SQS indisponível, timeout ou lock timeout. Inclui `Retry-After` |
+| 500 | `INTERNAL_ERROR` | TRANSIENT | Erro interno sem registro: `panic`, ou falha permanente ao ler uma operação já gravada com a mesma chave. Nada foi persistido, e reenviar com a mesma chave é seguro. Não confundir com o 500 de `FAILED`, que é um corpo de resultado (§5.2) |
+| 503 | `TEMPORARILY_UNAVAILABLE` | TRANSIENT | PostgreSQL ou SQS indisponível, timeout ou lock timeout. Inclui `Retry-After: 1` |
 
 ### 5.4 Códigos exclusivos do SQS (atributo `errorCode` na DLQ)
 
@@ -243,7 +246,9 @@ autenticar (401) → autorizar role (403)
   (falha permanente: FAILED gravado em transação separada → 500)
 ```
 
-Uma violação de unicidade de idempotência no commit resulta em rollback, releitura e resposta de replay ou 409. Um erro transitório em qualquer ponto resulta em rollback e 503.
+Uma violação de unicidade de idempotência (ou de reversão) resulta em rollback e em uma nova execução desde a busca de idempotência, que termina em replay, 409 ou `ALREADY_REVERSED`; são no máximo 3 tentativas, e esgotá-las resulta em 503. Um erro transitório em qualquer ponto resulta em rollback e 503.
+
+A falha permanente é gravada como `FAILED` quando acontece depois do lock da carteira. Se ela vier da própria busca de idempotência (a linha já gravada com essa chave não pode ser lida), não há o que gravar, porque a chave está ocupada: a resposta é 500 `problem+json` `INTERNAL_ERROR`.
 
 ### 6.2 SQS — `wager-transactions.fifo`
 
