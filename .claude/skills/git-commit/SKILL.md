@@ -1,6 +1,6 @@
 ---
 name: git-commit
-description: Create clean, well-structured git commits using the Conventional Commits standard. Use this skill whenever the user wants to commit changes — phrases like "commit this", "make a commit", "commit my changes", "git commit", "save this to git", "let's commit", or when a task naturally ends in committing work. Trigger even when the user doesn't say the words "conventional commits", since this skill defines HOW to commit — atomic commits split by responsibility, English messages, the type(scope) subject format, and optional Claude co-authorship. Do NOT use it for pushing, opening PRs, or rewriting published history.
+description: Create clean, well-structured git commits using the Conventional Commits standard. Use this skill whenever the user wants to commit changes — phrases like "commit this", "make a commit", "commit my changes", "git commit", "save this to git", "let's commit", or when a task naturally ends in committing work. Trigger even when the user doesn't say the words "conventional commits", since this skill defines HOW to commit — atomic commits split by responsibility, English messages and the type(scope) subject format. Do NOT use it for pushing, opening PRs, or rewriting published history.
 ---
 
 # Git Commit
@@ -64,11 +64,10 @@ Then commit. Prefer a heredoc so multi-line bodies and trailers are clean:
 
 ```bash
 git commit -m "feat(auth): add password reset flow" \
-           -m "Users can now request a reset link from the login page." \
-           -m "Co-authored-by: Claude <noreply@anthropic.com>"
+           -m "Users can now request a reset link from the login page."
 ```
 
-(Each `-m` becomes a paragraph: subject, then body, then the trailer block.)
+(Each `-m` becomes a paragraph: subject, then body, then any footers.)
 
 ### 5. Verify
 
@@ -113,15 +112,9 @@ Add a body when the change needs a _why_ that the subject can't carry — non-ob
 - Breaking changes: a `BREAKING CHANGE: <description>` footer, or a `!` after the type/scope (`feat(api)!: drop v1 endpoints`).
 - Issue references: `Closes #123`, `Refs #456`.
 
-## Claude co-authorship
+## No co-authorship trailers
 
-Adding Claude as a co-author is permitted and on by default. Append this trailer as the last paragraph of the message, after a blank line:
-
-```
-Co-authored-by: Claude <noreply@anthropic.com>
-```
-
-GitHub and GitLab recognize the `Co-authored-by:` trailer and attribute the commit to both authors. Omit it if the user asks you to, or if the repo has a convention against it.
+Never add `Co-authored-by:` trailers (for Claude or any AI assistant) to commit messages in this repository. Commits are authored by the repository owner only.
 
 ## Examples
 
@@ -145,7 +138,6 @@ second charge. Add an idempotency key derived from the order id so
 retries collapse to a single charge.
 
 Closes #482
-Co-authored-by: Claude <noreply@anthropic.com>
 ```
 
 **Splitting one file across two commits**
