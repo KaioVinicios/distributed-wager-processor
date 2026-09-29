@@ -1,0 +1,150 @@
+package httpapi_test
+
+import (
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/KaioVinicios/pda/api"
+	"github.com/KaioVinicios/pda/internal/adapters/httpapi"
+)
+
+// Covers: HTTP-09, D-18 (U17: correlation)
+func TestEdgeCorrelationID(t *testing.T) {
+	e := newEdge(t, httpapi.Services{}, false)
+	cases := []struct {
+		name, sent string
+		kept       bool
+	}{
+		{"valid id is kept", "abc-123_X.y", true},
+		{"invalid characters are replaced", "bad id!", false},
+		{"too long is replaced", strings.Repeat("a", 129), false},
+		{"absent is generated", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := http.Header{}
+			if tc.sent != "" {
+				h.Set("X-Correlation-Id", tc.sent)
+			}
+			rec := e.do(t, call{method: http.MethodGet, path: "/nope", header: h})
+			got := rec.Header().Get("X-Correlation-Id")
+			switch {
+			case tc.kept && got != tc.sent:
+				t.Fatalf("correlation = %q, want %q", got, tc.sent)
+			case !tc.kept && (got == "" || got == tc.sent || len(got) != 36):
+				t.Fatalf("correlation = %q, want a generated UUID", got)
+			}
+			wantProblem(t, rec, http.StatusNotFound, "ROUTE_NOT_FOUND", "")
+		})
+	}
+}
+
+// Covers: HTTP-09 (U17: route fallback)
+func TestEdgeRouteFallback(t *testing.T) {
+	e := newEdge(t, httpapi.Services{}, false)
+	wantProblem(t, e.do(t, call{method: http.MethodGet, path: "/nope"}), http.StatusNotFound, "ROUTE_NOT_FOUND", "")
+	rec := e.do(t, call{method: http.MethodDelete, path: "/wallets"})
+	wantProblem(t, rec, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "")
+	if allow := rec.Header().Get("Allow"); allow != "POST" {
+		t.Fatalf("Allow = %q, want POST", allow)
+	}
+	wantProblem(t, e.do(t, call{method: http.MethodGet, path: "/docs"}), http.StatusNotFound, "ROUTE_NOT_FOUND", "")
+}
+
+// Covers: AUTH-02, AUTH-06, AUTH-07, AUTH-08 (U17: authentication and roles)
+func TestEdgeAuthentication(t *testing.T) {
+	e := newEdge(t, httpapi.Services{}, false)
+
+	t.Run("missing token", func(t *testing.T) {
+		rec := e.do(t, call{method: http.MethodGet, path: "/wallets/w-1"})
+		wantProblem(t, rec, http.StatusUnauthorized, "UNAUTHENTICATED", "")
+		if got := rec.Header().Get("WWW-Authenticate"); got != `Bearer realm="pda"` {
+			t.Fatalf("WWW-Authenticate = %q", got)
+		}
+	})
+	t.Run("other scheme counts as missing", func(t *testing.T) {
+		rec := e.do(t, call{method: http.MethodGet, path: "/wallets/w-1", header: http.Header{"Authorization": {"Basic dTpw"}}})
+		wantProblem(t, rec, http.StatusUnauthorized, "UNAUTHENTICATED", "")
+		if got := rec.Header().Get("WWW-Authenticate"); got != `Bearer realm="pda"` {
+			t.Fatalf("WWW-Authenticate = %q", got)
+		}
+	})
+	for _, token := range []string{"forged", " "} {
+		t.Run("invalid token "+token, func(t *testing.T) {
+			rec := e.do(t, call{method: http.MethodGet, path: "/wallets/w-1", header: http.Header{"Authorization": {"Bearer " + token}}})
+			wantProblem(t, rec, http.StatusUnauthorized, "UNAUTHENTICATED", "")
+			if got := rec.Header().Get("WWW-Authenticate"); got != `Bearer realm="pda", error="invalid_token"` {
+				t.Fatalf("WWW-Authenticate = %q", got)
+			}
+		})
+	}
+	t.Run("role of another kind of caller", func(t *testing.T) {
+		for _, c := range []call{
+			{method: http.MethodGet, path: "/wallets/w-1", token: tokenProviderA},
+			{method: http.MethodPost, path: "/wallets/w-1/reconciliation", token: tokenNoRole},
+			{method: http.MethodPost, path: "/wagering/transactions", token: tokenInternal, contentType: "application/json", body: "{}"},
+			{method: http.MethodGet, path: "/wagering/transactions/t-1", token: tokenNoRole},
+			{method: http.MethodGet, path: "/providers/provider-a/wagering/transactions/e-1", token: tokenNoRole},
+		} {
+			wantProblem(t, e.do(t, c), http.StatusForbidden, "FORBIDDEN", "")
+		}
+	})
+	t.Run("public routes need no token", func(t *testing.T) {
+		for _, path := range []string{"/health/live", "/health/ready"} {
+			if rec := e.do(t, call{method: http.MethodGet, path: path}); rec.Code != http.StatusOK {
+				t.Fatalf("GET %s = %d", path, rec.Code)
+			}
+		}
+	})
+}
+
+// Covers: HTTP-09 (U17: media type)
+func TestEdgeRequiresJSON(t *testing.T) {
+	e := newEdge(t, httpapi.Services{}, false)
+	for _, ct := range []string{"", "text/plain", "application/x-www-form-urlencoded"} {
+		rec := e.do(t, call{method: http.MethodPost, path: "/wallets", token: tokenInternal, contentType: ct, body: "{}"})
+		wantProblem(t, rec, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "")
+	}
+	// The media type is checked after the credentials (lifecycle §6.1).
+	wantProblem(t, e.do(t, call{method: http.MethodPost, path: "/wallets", contentType: "text/plain"}), http.StatusUnauthorized, "UNAUTHENTICATED", "")
+}
+
+// Covers: HTTP-09 (U17: panic)
+func TestEdgeRecoversPanics(t *testing.T) {
+	e := newEdge(t, httpapi.Services{}, false)
+	wantProblem(t, e.do(t, call{method: http.MethodGet, path: "/wallets/w-1", token: tokenPanic}), http.StatusInternalServerError, "INTERNAL_ERROR", "")
+	if logs := e.logs.String(); !strings.Contains(logs, "stub authenticator panic") || !strings.Contains(logs, `"level":"ERROR"`) {
+		t.Fatalf("logs = %s, want the panic at ERROR", logs)
+	}
+}
+
+// Covers: OBS-01, OBS-02 (U17: access log)
+func TestEdgeAccessLog(t *testing.T) {
+	e := newEdge(t, httpapi.Services{}, false)
+	h := http.Header{"X-Correlation-Id": {"corr-log-1"}}
+	e.do(t, call{method: http.MethodGet, path: "/wallets/w-1", token: tokenProviderA, header: h})
+	logs := e.logs.String()
+	for _, want := range []string{`"msg":"http request"`, `"method":"GET"`, `"route":"GET /wallets/{walletId}"`, `"status":403`, `"correlationId":"corr-log-1"`, `"providerId":"provider-a"`} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("access log %s lacks %s", logs, want)
+		}
+	}
+	if strings.Contains(logs, tokenProviderA) {
+		t.Fatalf("access log leaks the token: %s", logs)
+	}
+}
+
+// Covers: DOC-06, D-20
+func TestEdgeDocs(t *testing.T) {
+	e := newEdge(t, httpapi.Services{}, true)
+	rec := e.do(t, call{method: http.MethodGet, path: "/openapi.yaml"})
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/yaml" || rec.Body.String() != string(api.OpenAPI) {
+		t.Fatalf("GET /openapi.yaml = %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	rec = e.do(t, call{method: http.MethodGet, path: "/docs"})
+	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") ||
+		!strings.Contains(rec.Body.String(), "swagger-ui-dist@5.33.0") || !strings.Contains(rec.Body.String(), `url: "/openapi.yaml"`) {
+		t.Fatalf("GET /docs = %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+}

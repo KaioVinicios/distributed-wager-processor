@@ -1,6 +1,36 @@
 package httpapi
 
-import "go.uber.org/fx"
+import (
+	"log/slog"
+	"net/http"
 
-// Module provides the router and starts the API server.
-var Module = fx.Module("httpapi", fx.Provide(NewMux), fx.Invoke(RegisterServer))
+	"go.uber.org/fx"
+
+	"github.com/KaioVinicios/pda/internal/app"
+	"github.com/KaioVinicios/pda/internal/auth"
+	"github.com/KaioVinicios/pda/internal/config"
+	"github.com/KaioVinicios/pda/internal/observability"
+)
+
+// Module provides the API handler and starts the API server.
+var Module = fx.Module("httpapi", fx.Provide(newHandler), fx.Invoke(RegisterServer))
+
+type handlerParams struct {
+	fx.In
+
+	Config    config.Config
+	Log       *slog.Logger
+	Health    *observability.Health
+	Verifier  *auth.Verifier
+	Wagers    *app.ProcessWager
+	Wallets   *app.OpenWallet
+	Queries   *app.Queries
+	Reconcile *app.Reconcile
+}
+
+func newHandler(p handlerParams) http.Handler {
+	return New(Options{DocsEnabled: p.Config.APIDocsEnabled, Log: p.Log}, Services{
+		Auth: p.Verifier, Wagers: p.Wagers, Wallets: p.Wallets, Queries: p.Queries,
+		Reconcile: p.Reconcile, Health: p.Health,
+	})
+}

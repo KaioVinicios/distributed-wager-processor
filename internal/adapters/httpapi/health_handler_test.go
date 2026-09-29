@@ -27,7 +27,8 @@ func serve(t *testing.T, method, path string, cs ...observability.Checker) *http
 	t.Helper()
 	h := observability.NewHealth(slog.New(slog.DiscardHandler), cs, time.Second)
 	rec := httptest.NewRecorder()
-	httpapi.NewMux(h).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), method, path, nil))
+	httpapi.New(httpapi.Options{Log: slog.New(slog.DiscardHandler)}, httpapi.Services{Health: h}).
+		ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), method, path, nil))
 	return rec
 }
 
