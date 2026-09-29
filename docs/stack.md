@@ -262,9 +262,9 @@ formatters:
         - github.com/KaioVinicios/pda
 ```
 
-**No M0, verificar:**
-1. A imagem do golangci-lint v2.14.0 consegue analisar um módulo com `go 1.27.1`. Se não conseguir, ajustar para a versão mais recente compatível.
-2. O padrão `^float(32|64)$` do `forbidigo` captura o uso de `float64` como tipo, testando com um arquivo temporário. Se não capturar, o U01g continua sendo a garantia.
+**Verificado no spike do M0** ([`dev/spike-lint.md`](dev/spike-lint.md)):
+1. ✅ A imagem do golangci-lint v2.14.0 traz Go 1.27.1 e analisa o módulo com `go 1.27.1`. A configuração acima passa em `golangci-lint config verify`.
+2. ✅ O padrão `^float(32|64)$`, com `analyze-types: true`, captura `float32`/`float64` em tipos, variáveis, parâmetros, retornos e conversões, além de `strconv.ParseFloat`/`FormatFloat`. A única lacuna é o float inferido de literal (`x := 1.5`), coberto pelo U01g.
 
 `faultinject_on.go` (tag `faultinject`) fica fora do lint, que não habilita essa tag. Ele é coberto por `go vet -tags=faultinject` no `make vet`.
 

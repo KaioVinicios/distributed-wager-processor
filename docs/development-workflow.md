@@ -124,7 +124,7 @@ Estes artefatos não passam por TDD, mas cada um tem uma **validação obrigató
 | `Makefile`, `.golangci.yml`, `.editorconfig` | `make check` executado e verde |
 | `.env.example` | Usado de fato pelo compose e pelos testes |
 | `deploy/keycloak/*.json` | Testes A01–A04 com tokens reais |
-| `deploy/aws/init.sh` e as políticas | Smoke test do `testkit` confirmando que filas, redrive, tópico e assinatura existem |
+| `deploy/aws/init.sh` e as políticas | Smoke test do `testkit` confirmando que filas, redrive, tópico e assinatura existem; I04f provando permissões e negações das políticas |
 | `deploy/postgres/01-roles.sh` | Teste I02b (permissões de `pda_app`) |
 | Código de spike | Nunca é mantido. Se a solução for aproveitada, é reescrita com TDD |
 | Documentação | Revisão de links e execução real dos comandos do README no M11 |

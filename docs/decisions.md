@@ -9,7 +9,7 @@ Decisões técnicas e interpretações do [`CHALLENGE.md`](../CHALLENGE.md) adot
 | ID | Tema | Decisão | Origem |
 | --- | --- | --- | --- |
 | D-01 | Stack base | Go 1.27.1, `net/http` ServeMux, pgx v5, golang-migrate, slog, Prometheus, UUIDv7 | ⚙️ |
-| D-02 | Emulador AWS | MiniStack (MIT, sem conta), SQS FIFO + SNS FIFO | 🗳️ |
+| D-02 | Emulador AWS | MiniStack (MIT, sem conta) com `AUTH=true`, SQS FIFO + SNS FIFO, políticas IAM avaliadas | 🗳️ |
 | D-03 | Money | `int64` em centavos, escala 2, formato de entrada estrito, sem normalização | 🗳️ |
 | D-04 | Semântica HTTP | Processamento síncrono; 200 / 202 / 422 / 500 / 400 / 401 / 403 / 404 / 409 / 503 | 🗳️ |
 | D-05 | Processamento e estados | Sem commit intermediário de `PENDING`; só `PENDING_REFERENCE` é persistido como espera | ⚙️ |
@@ -52,19 +52,29 @@ As versões fixadas, as imagens, as ferramentas de lint e formatação e a confo
 
 ## D-02 — Emulador AWS: MiniStack 🗳️ [AUTH-09, SQS-01, OUT-07]
 
-**Decisão:** usar `ministackorg/ministack` na porta 4566, com as credenciais fictícias do `.env.example`.
+**Decisão:** usar `ministackorg/ministack:1.5.18` na porta 4566 com **`AUTH=true`**, para que as políticas IAM sejam de fato avaliadas.
 
 **Motivo:**
 - Desde a versão 2026.03.0, a imagem `localstack/localstack` exige `LOCALSTACK_AUTH_TOKEN` e conta. Isso quebra a exigência de reproduzir a solução a partir de um checkout limpo (§15).
-- O MiniStack tem licença MIT, não pede conta, é compatível com o SDK e a porta do LocalStack, e suporta SQS FIFO, DLQ, visibilidade e fan-out SNS→SQS.
+- O MiniStack tem licença MIT, não pede conta e é compatível com o SDK e a porta do LocalStack. O spike do M0 ([`dev/spike-ministack.md`](dev/spike-ministack.md)) confirmou:
+  - SQS FIFO, DLQ com redrive, `ChangeMessageVisibility` e long polling;
+  - SNS FIFO com assinatura SQS FIFO e `RawMessageDelivery`;
+  - avaliação de políticas IAM com `AUTH=true`.
+- Nenhum plano B é necessário.
 
-**Limitação que precisa ser documentada:** nenhum emulador gratuito aplica políticas IAM. No LocalStack, o enforcement é pago; no MiniStack, as políticas são armazenadas mas não avaliadas. Para cumprir AUTH-09 da forma possível:
-1. A aplicação usa credenciais próprias, configuradas por env e nunca embutidas no código.
-2. O script de provisionamento cria as políticas de fila e de tópico com o menor privilégio: os provedores só podem `SendMessage` na fila de entrada; o serviço pode consumir (`ReceiveMessage`, `DeleteMessage`, `ChangeMessageVisibility`), enviar para a DLQ e fazer `Publish` no tópico ([`messaging.md`](messaging.md) §2.1).
-3. Os documentos de política ficam em `deploy/aws/policies/` e em [`messaging.md`](messaging.md) §2.1, e o `ARCHITECTURE.md` deixa explícito que o emulador não os avalia.
-4. O consumidor aplica todas as validações de domínio sem confiar na origem da mensagem.
+**Como o AUTH-09 é cumprido** (decisão do autor em 28/09/2026, depois do spike):
+1. **Principals reais.** O `aws-init` usa a chave raiz do emulador (`test`) só para provisionar. Ele cria os usuários IAM `pda-wallet-service`, `provider-a` e `provider-b`, cada um com uma **política de identidade** de menor privilégio ([`messaging.md`](messaging.md) §2.1). A fila de auditoria recebe a única **política de recurso**, que permite a entrega pelo tópico (`aws:SourceArn`).
+2. **Credenciais fora do código.**
+   - O `aws-init` gera as chaves (`CreateAccessKey`, que no emulador é sempre aleatória) e grava o arquivo `.local/aws/credentials`, em formato INI, com um profile por usuário. O diretório é um bind mount ignorado pelo git.
+   - A aplicação lê as chaves pelo mecanismo nativo do SDK: `AWS_SHARED_CREDENTIALS_FILE` + `AWS_PROFILE=pda-wallet-service`.
+3. **Políticas versionadas e testadas.** Os documentos ficam em `deploy/aws/policies/`, são aplicados pelo `init.sh` e são reutilizados pelo teste I04f. Esse teste prova as negações: provedor não consome, serviço não envia na fila de entrada, ninguém fora da lista publica no tópico.
+4. **Sem confiar na origem.** O consumidor aplica todas as validações de domínio.
 
-**Risco a validar no dia 1:** confirmar no MiniStack o suporte a tópico SNS **FIFO**, à assinatura SNS→SQS FIFO com `RawMessageDelivery`, à `RedrivePolicy` e a `ChangeMessageVisibility`, e verificar se alguma configuração (ou a variante `-full` da imagem) passa a **avaliar** políticas IAM. Se passar, a limitação acima deixa de existir. Se o SNS FIFO falhar, o plano B é publicar direto na fila SQS FIFO `wallet-events.fifo` (D-13).
+**Limitações que continuam** (documentadas no `ARCHITECTURE.md` §16):
+- O emulador **não verifica a assinatura SigV4**: o principal é identificado só pelo access key id. A **autorização** é real; a autenticação no broker é fraca localmente.
+- O MiniStack só concede acesso por **política de identidade**. Ele respeita `Deny` em política de recurso e a política da fila na entrega do SNS, mas não aceita um `Allow` concedido só pela política de recurso, que na AWS basta dentro da mesma conta. Por isso as permissões ficam nas políticas de identidade, que também é o padrão usual na AWS.
+
+**Testes de integração:** provisionam recursos isolados com a chave raiz. Só o I04f cria usuários com as políticas de `deploy/aws/policies/`.
 
 ---
 
@@ -181,9 +191,14 @@ Um segundo realm, `other`, com um client de teste, fornece tokens com `iss` e ch
 - Verifica `iss`, `aud` e `exp`/`nbf` (tolerância de 30 s).
 - O `aud` contém `pda-api`, adicionado por um audience mapper no Keycloak.
 
-**Armadilha conhecida:** o `iss` do token depende do hostname que o cliente usou (`localhost` no host, `keycloak` na rede do compose). Para resolver:
-- fixar `KC_HOSTNAME=http://localhost:8080` e habilitar o backchannel dinâmico;
-- no serviço, configurar `OIDC_ISSUER`, que é o `iss` esperado, separado de `OIDC_JWKS_URL`, que é por onde as chaves são buscadas.
+**Armadilha conhecida:** o `iss` do token depende do hostname que o cliente usou (`localhost` no host, `keycloak` na rede do compose). Para resolver (validado no spike, [`dev/spike-keycloak.md`](dev/spike-keycloak.md) §3):
+- fixar `KC_HOSTNAME=http://localhost:8080` e `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true`;
+- no serviço, configurar `OIDC_ISSUER`, que é o `iss` esperado, separado de `OIDC_JWKS_URL`, que é por onde as chaves são buscadas;
+- o verificador usa `oidc.NewRemoteKeySet(OIDC_JWKS_URL)` + `oidc.NewVerifier(OIDC_ISSUER, …)`, **sem discovery**. Dentro da rede, o discovery devolve um `issuer` (`localhost`) diferente da URL consultada (`keycloak`), e o go-oidc o recusaria.
+
+**Segunda armadilha, a audience implícita:** o client scope padrão `roles` do Keycloak traz o mapper `audience resolve`, que põe em `aud` todo client do qual o token tem roles. Com ele, o `no-audience-client` receberia `aud: pda-api` e o teste de audience inválida não testaria nada. O `realm-pda.json` declara o scope `roles` **só com o mapper `client roles`**, e a audience vem exclusivamente do `oidc-audience-mapper` de cada client ([`dev/spike-keycloak.md`](dev/spike-keycloak.md) §2).
+
+**Healthcheck:** a imagem não tem `curl` nem `wget`. O compose usa `bash` com `/dev/tcp` contra `GET /health/ready` na porta de gerenciamento 9000 (`KC_HEALTH_ENABLED=true`).
 
 **Matriz de permissões:**
 

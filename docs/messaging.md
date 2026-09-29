@@ -30,7 +30,7 @@ flowchart LR
 
 ## 2. Provisionamento
 
-Um serviço `aws-init` no compose executa `deploy/aws/init.sh` com a imagem `amazon/aws-cli` contra `http://ministack:4566`. O script é **idempotente**: `create-queue` e `create-topic` com os mesmos atributos não falham, e as assinaturas são verificadas antes de serem criadas. A aplicação depende de `aws-init: condition: service_completed_successfully`.
+Um serviço `aws-init` no compose executa `deploy/aws/init.sh` com a imagem `amazon/aws-cli` contra `http://ministack:4566`. O script é **idempotente**: `create-queue` e `create-topic` com os mesmos atributos não falham, as assinaturas e os usuários IAM são verificados antes de serem criados, e as chaves de acesso são recriadas a cada execução (o arquivo de credenciais é reescrito, ver §2.1). A aplicação depende de `aws-init: condition: service_completed_successfully`.
 
 | Recurso | Tipo | Atributos |
 | --- | --- | --- |
@@ -45,35 +45,47 @@ Todos os nomes vêm de variáveis de ambiente (`SQS_WAGER_QUEUE_NAME`, `SQS_WAGE
 
 ### 2.1 Credenciais e políticas (AUTH-09)
 
-As políticas são provisionadas como **políticas de recurso**, com `SetQueueAttributes Policy` nas filas e `SetTopicAttributes Policy` no tópico, sobre os principals abaixo:
+O MiniStack roda com `AUTH=true` e **avalia** as políticas (D-02, [`dev/spike-ministack.md`](dev/spike-ministack.md) §3).
+- O `aws-init` provisiona tudo com a chave raiz do emulador (`test`).
+- Em seguida, cria um **usuário IAM por principal** com uma **política de identidade** (`PutUserPolicy`), gera as chaves e grava `.local/aws/credentials`, em formato INI, com um profile por usuário.
+- A aplicação usa `AWS_SHARED_CREDENTIALS_FILE` + `AWS_PROFILE=pda-wallet-service`, e as chaves nunca aparecem no código nem no `.env.example`.
 
-| Principal | Pode | Recurso |
-| --- | --- | --- |
-| `arn:aws:iam::000000000000:user/provider-a`, `…/provider-b` | `sqs:SendMessage` | `wager-transactions.fifo` |
-| `arn:aws:iam::000000000000:user/pda-wallet-service` | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility`, `sqs:GetQueueAttributes` | `wager-transactions.fifo` |
-| `…/pda-wallet-service` | `sqs:SendMessage`, `sqs:GetQueueAttributes` | `wager-transactions-dlq.fifo` |
-| `…/pda-wallet-service` | `sns:Publish` | `wallet-events.fifo` |
-| `sns.amazonaws.com` (condição `aws:SourceArn = <topic-arn>`) | `sqs:SendMessage` | `wallet-events-audit.fifo` |
+| Principal | Tipo de política | Pode | Recurso |
+| --- | --- | --- | --- |
+| `user/provider-a`, `user/provider-b` | Identidade | `sqs:SendMessage`, `sqs:GetQueueUrl` | `wager-transactions.fifo` |
+| `user/pda-wallet-service` | Identidade | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility`, `sqs:GetQueueAttributes`, `sqs:GetQueueUrl` | `wager-transactions.fifo` |
+| `user/pda-wallet-service` | Identidade | `sqs:SendMessage`, `sqs:GetQueueAttributes`, `sqs:GetQueueUrl` | `wager-transactions-dlq.fifo` |
+| `user/pda-wallet-service` | Identidade | `sns:Publish` | `wallet-events.fifo` |
+| `sns.amazonaws.com` (condição `aws:SourceArn = <topic-arn>`) | Recurso (fila) | `sqs:SendMessage` | `wallet-events-audit.fifo` |
 
-Exemplo, a política da fila de entrada:
+Tudo o que não está na tabela é negado implicitamente. Por exemplo: provedor consumindo ou publicando no tópico, serviço enviando na fila de entrada, qualquer principal criando ou apagando recursos.
+
+Exemplo, a política de identidade de `pda-wallet-service` (`deploy/aws/policies/pda-wallet-service.json`, com os ARNs substituídos pelo `init.sh`):
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Sid": "ProvidersSend", "Effect": "Allow",
-      "Principal": { "AWS": ["arn:aws:iam::000000000000:user/provider-a",
-                             "arn:aws:iam::000000000000:user/provider-b"] },
-      "Action": "sqs:SendMessage", "Resource": "<queue-arn>" },
-    { "Sid": "WalletServiceConsume", "Effect": "Allow",
-      "Principal": { "AWS": "arn:aws:iam::000000000000:user/pda-wallet-service" },
-      "Action": ["sqs:ReceiveMessage","sqs:DeleteMessage","sqs:ChangeMessageVisibility","sqs:GetQueueAttributes"],
-      "Resource": "<queue-arn>" }
+    { "Sid": "ConsumeWagerQueue", "Effect": "Allow",
+      "Action": ["sqs:ReceiveMessage","sqs:DeleteMessage","sqs:ChangeMessageVisibility",
+                 "sqs:GetQueueAttributes","sqs:GetQueueUrl"],
+      "Resource": "<wager-queue-arn>" },
+    { "Sid": "SendToDLQ", "Effect": "Allow",
+      "Action": ["sqs:SendMessage","sqs:GetQueueAttributes","sqs:GetQueueUrl"],
+      "Resource": "<dlq-arn>" },
+    { "Sid": "PublishEvents", "Effect": "Allow",
+      "Action": "sns:Publish", "Resource": "<topic-arn>" }
   ]
 }
 ```
 
-> **Limitação (D-02):** o MiniStack armazena essas políticas mas **não as avalia**. O mesmo vale para o LocalStack gratuito. A aplicação usa credenciais próprias vindas do ambiente (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`), e os documentos acima são os que valeriam em produção. O consumidor **nunca** confia na origem: aplica todas as validações de domínio (D-07).
+**Por que política de identidade, e não de recurso:** na AWS, dentro da mesma conta, as duas funcionam. O MiniStack só concede acesso pela de identidade (o `Allow` só na de recurso é negado), embora respeite `Deny` em política de recurso e a política da fila na entrega do SNS. A política de identidade também é o padrão usual para os principals da própria conta.
+
+**O teste I04f** aplica esses mesmos documentos a usuários criados para o teste e verifica as permissões e as negações.
+
+> **Limitações (D-02):**
+> - O emulador não verifica a assinatura SigV4: o principal é identificado só pelo access key id. A **autorização** é aplicada de verdade; a **autenticação** no broker é fraca localmente. Em produção, as credenciais viriam de roles IAM (IRSA ou task role), sem chaves estáticas.
+> - O consumidor **nunca** confia na origem: aplica todas as validações de domínio (D-07).
 
 ---
 

@@ -139,7 +139,7 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | U01d | `TestMoneyJSON`: ida e volta pelo JSON; o JSON gerado contém strings, não números; um valor negativo (ex.: `difference`) sai como `"-5.00"`, mas a entrada externa negativa é rejeitada | MON-01, MON-04, MON-09 |
 | U01e | `TestMoneyZeroValue`: `Money{}` é rejeitado em todas as operações | MON-11, DOM-03 |
 | U01f | `FuzzParseMoney`: nunca entra em `panic`; o que é aceito sai idêntico na formatação de volta | MON-05, DOM-05 |
-| U01g | `TestNoFloatInMoney`: analisa a AST do pacote `money` e falha se encontrar os identificadores `float32`, `float64` ou `strconv.ParseFloat` | MON-01, E3 |
+| U01g | `TestNoFloatInMoney`: analisa a AST do pacote `money` e falha se encontrar os identificadores `float32`, `float64` ou `strconv.ParseFloat`, ou um literal de ponto flutuante (`token.FLOAT`), que o `forbidigo` não captura ([`dev/spike-lint.md`](dev/spike-lint.md)) | MON-01, E3 |
 | U02 | `TestWallet*`: criação com versão 1; débito sem saldo devolve erro; crédito e débito incrementam a versão; moeda diferente é rejeitada; `Rehydrate` não altera estado nem versão; `Wallet{}` (zero value) é rejeitada | TST-U02, WAL-*, DOM-02, DOM-03 |
 | U03 | `TestTransactionStateMachine`: matriz de todos os pares origem × destino (válidos e inválidos); estado terminal devolve `ErrInvalidTransition`; `NewExternal` e `NewOpening` nascem em `PENDING` | TST-U03, TX-06, TX-07 |
 | U04a | `TestKindRules`: tabela tipo × regra (valor, referência, movimento, eventos) de [`transaction-lifecycle.md`](transaction-lifecycle.md) §2 | TST-U04, OPS-01..07 |
@@ -174,6 +174,7 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | I04c | `TestInvalidMessagesGoToDLQ`: JSON quebrado, `type` errado, `OPENING`, campo desconhecido e `UNKNOWN_WALLET` vão para a DLQ com o `errorCode` correto e são removidos da fila principal | SQS-07, SQS-10 |
 | I04d | `TestTransientFailureRedrive`: um dublê do caso de uso devolve erro transitório para um `messageId`; depois de 3 recebimentos a mensagem está na DLQ, via redrive | SQS-07, TST-I05 |
 | I04e | `TestBusinessRejectionDeletesMessage`: um BET sem saldo pelo SQS fica `REJECTED` e a mensagem sai da fila, sem ir para a DLQ | SQS-06 |
+| I04f | `TestBrokerPoliciesEnforced`: aplica os documentos de `deploy/aws/policies/` a usuários IAM criados para o teste, sobre recursos isolados. Verifica o que é permitido (provedor envia; serviço consome, altera visibilidade, envia para a DLQ e publica) e o que é negado com `AccessDenied` (provedor consome ou publica, serviço envia na fila de entrada, usuário sem política faz qualquer coisa) | AUTH-09 |
 | I05a | `TestOutboxConcurrentPublishers`: 2 publishers em processo, cada um com seu pool, e 200 eventos. Todos são publicados, todo `eventId` aparece na fila de auditoria com o payload idêntico ao do banco, e nenhum fica pendente | TST-I05, OUT-03 |
 | I05b | `TestNoPublishBeforeCommit`: o teste abre uma transação, insere na outbox e segura o commit. Em 2 s, nada chega à fila de auditoria; depois do commit, o evento chega | OUT-10, E8 |
 | I05c | `TestOutboxRetryBackoff`: um publisher que falha nas 3 primeiras chamadas e depois delega ao SNS real faz `attempts` chegar a 3, respeita `next_attempt_at` e publica | OUT-04 |
