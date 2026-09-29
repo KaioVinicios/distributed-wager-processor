@@ -38,7 +38,19 @@ func ParseDotEnv(r io.Reader) (map[string]string, error) {
 // DotEnv loads .env.example, overridden by .env when present.
 func DotEnv(tb testing.TB) map[string]string {
 	tb.Helper()
-	root := RepoRoot(tb)
+	vals, err := LoadDotEnv()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return vals
+}
+
+// LoadDotEnv is DotEnv for callers without a testing.TB, such as TestMain.
+func LoadDotEnv() (map[string]string, error) {
+	root, err := findRepoRoot()
+	if err != nil {
+		return nil, err
+	}
 	merged := map[string]string{}
 	for i, name := range []string{".env.example", ".env"} {
 		f, err := os.Open(filepath.Join(root, name))
@@ -46,16 +58,16 @@ func DotEnv(tb testing.TB) map[string]string {
 			continue
 		}
 		if err != nil {
-			tb.Fatalf("open %s: %v", name, err)
+			return nil, fmt.Errorf("testkit: open %s: %w", name, err)
 		}
 		vals, err := ParseDotEnv(f)
 		_ = f.Close()
 		if err != nil {
-			tb.Fatalf("parse %s: %v", name, err)
+			return nil, fmt.Errorf("testkit: parse %s: %w", name, err)
 		}
 		for k, v := range vals {
 			merged[k] = v
 		}
 	}
-	return merged
+	return merged, nil
 }
