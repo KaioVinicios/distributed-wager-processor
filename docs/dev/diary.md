@@ -43,10 +43,31 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
 - **Decisões novas** (em `decisions.md`): erro não classificado é transitório; chave de idempotência em ASCII visível; IDs do domínio como string canônica; `eventId` atribuído no `Seal`.
 - **Achado na validação do plano:** relógio de outra instância atrás do `createdAt` viraria falha permanente; `updatedAt` passou a ter `createdAt` como piso.
 
+## 29/09/2026 (ter): M2, persistência
+
+- [Spec](specs/2026-09-29-m2-persistence-design.md) → [plano](plans/2026-09-29-m2-persistence.md) → execução com TDD.
+- **Entregue:**
+  - migrations 000001–000006 com todas as constraints, triggers e grants do data-model;
+  - portas em `internal/app`, UoW (`Do` e `Snapshot`) e os 5 repositórios;
+  - tradução de erros sem vazar o `Detail` do PostgreSQL;
+  - serviço `migrate` no compose.
+- **Decisões novas** (spec §2, `decisions.md` D-09 e D-14):
+  - corridas de unicidade como sentinelas transitórias;
+  - `lock_timeout` por `set_config` na transação inteira;
+  - saldo observado na moeda da carteira;
+  - ID não canônico → "não encontrado";
+  - UoW interrompida pelo `ctx` → transitória.
+- **Achados da validação do plano:**
+  - o `result_balance_minor` numa rejeição `CURRENCY_MISMATCH` voltaria na moeda errada;
+  - o `JSONB` normaliza o payload da outbox;
+  - os triggers disparam antes dos `CHECK`, por isso o I02a roda com eles desligados.
+- **Prova central:** o I17 grava todos os tipos (abertura, BET, WIN, LOSS, REFUND, ROLLBACK, rejeições e pendência resolvida) pelos repositórios, e o domínio do M1 e o schema concordam em tudo.
+
 ## Onde paramos
 
-- **M1 concluído e commitado.** Próximo passo: **M2, persistência** (migrations, repositórios, UoW e testes I01–I03, I16), começando pela spec.
+- **M2 concluído (commits aguardando autorização).** Próximo passo: **M3, contrato, casos de uso, HTTP e autenticação**, começando pela spec (contrato `api/openapi.yaml` primeiro, D-20).
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
-  - decidir se os 3 minors do M0 entram em algum marco.
+  - decidir se os 3 minors do M0 entram em algum marco;
+  - minors adiados na revisão do M2: `Ledger.List`/`Sum` e `AdvanceDependents` sem filtro de ID malformado; inbox aceita instantes zerados; repositórios sobre o pool podem escrever fora do UoW (só a convenção da D-14 impede).
   - **para a spec do M3:** o `app` precisa traduzir explicitamente os erros de invariante do domínio (`money.ErrOverflow`, `wagering.ErrInvalidSnapshot`, `ErrInvalidArgument`, `ErrInvalidTransition`, `wallet.ErrInvalidLedgerEntry`…) para `apperrors.KindPermanent`; pela D-05, um erro não classificado seria tratado como transitório.
