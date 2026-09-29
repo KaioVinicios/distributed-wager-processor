@@ -11,6 +11,22 @@ import (
 	"github.com/KaioVinicios/pda/internal/domain/wallet"
 )
 
+// Clock is the time source of the use cases; the domain receives now as a
+// parameter and never reads the clock itself.
+type Clock interface{ Now() time.Time }
+
+// IDGenerator creates the identifiers of new rows and events: canonical
+// lowercase UUIDv7 (D-08).
+type IDGenerator interface{ New() string }
+
+// Metrics is what the use cases report beyond logs. It grows with M7; the
+// observability adapter implements it with Prometheus.
+type Metrics interface {
+	// ReconciliationDivergence counts a reconciliation whose stored balance
+	// differs from the ledger (reconciliation_divergences_total, HTTP-07).
+	ReconciliationDivergence()
+}
+
 // UnitOfWork delimits one SQL transaction (D-14). Whoever holds the Repos is
 // inside the transaction; it is never hidden in the context.
 type UnitOfWork interface {
