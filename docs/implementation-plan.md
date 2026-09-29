@@ -48,15 +48,17 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 
 **Cobre:** ART-01..04, ART-06, ART-07, ART-10, HTTP-08, FX-01 (parcial), FX-02, AUTH-09 (parcial). Spec: [`dev/specs/2026-09-28-m0-skeleton-design.md`](dev/specs/2026-09-28-m0-skeleton-design.md).
 
-#### M1 — Domínio com TDD (~3 h)
+#### M1 — Domínio com TDD (~3 h) — ✅ concluído em 29/09
 
-- `money` (U01a–g), `wallet` + `LedgerEntry` (U02, U07), `wagering`: máquina de estados, regras por tipo, ordem de avaliação, resolução R1–R8, catálogo de códigos e hash canônico (U03, U04a–d, U05a–c).
-- `events`: envelope + 4 construtores (U08).
-- `apperrors` (`Kind` e `Classify`, U09a), o teste de imports do domínio (U10), a rejeição de zero values (U11) e a política de retentativa de referências (U12).
+- `ident` (UUID canônico; o domínio usa só a stdlib), `money` (U01a–g), `wallet` + `LedgerEntry` (U02, U07), `wagering`: máquina de estados, regras por tipo, ordem de avaliação, resolução R1–R8, catálogo de códigos e hash canônico (U03, U04a–d, U05a–c).
+- **O domínio decide e aplica** (abordagem A da spec): `wagering.Settle` (passos 12–15 + R1–R8, movimento pelo agregado, lançamento e eventos) e `wagering.OpenWallet`. O `app` do M3 e o worker do M6 só fazem I/O em volta deles.
+- `events`: 4 eventos tipados com interface selada e envelope por `events.Seal` (U08).
+- `apperrors` (`Kind` e `Classify`, U09a; erro não classificado é transitório, D-05), o teste de imports do domínio (U10), a rejeição de zero values (U11) e a política de retentativa de referências (U12).
+- Achado da validação do plano: `updatedAt` usa `createdAt` como piso, para que um relógio atrasado em outra instância não vire falha permanente.
 
 **Pronto quando:** toda a tabela §5.1 do test-plan está verde com `-race`, exceto o U09b, que é do pacote `postgres` (M2).
 
-**Cobre:** MON-*, DOM-*, WAL-01..07, TX-01..08, LED-01..02, OPS-01..11, OPS-15, IDEM-03..06, OUT-08, OUT-09, OUT-11..13 (vários parciais, completados no banco ou nas bordas; ver a spec). **Eliminatório: E3.** Spec: [`dev/specs/2026-09-29-m1-domain-design.md`](dev/specs/2026-09-29-m1-domain-design.md).
+**Cobre:** MON-*, DOM-*, WAL-01..07, TX-01..08, LED-01..02, OPS-01..11, OPS-15, IDEM-03..06, OUT-08, OUT-09, OUT-11..13 (vários parciais, completados no banco ou nas bordas; ver a spec). **Eliminatório: E3.** Spec: [`dev/specs/2026-09-29-m1-domain-design.md`](dev/specs/2026-09-29-m1-domain-design.md) · plano: [`dev/plans/2026-09-29-m1-domain.md`](dev/plans/2026-09-29-m1-domain.md).
 
 #### M2 — Persistência (~3 h)
 
@@ -72,7 +74,8 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 
 #### M3 — Contrato, casos de uso, HTTP e autenticação (~5 h)
 
-- `app`: `OpenWallet`, `ProcessWagerTransaction` (pipeline do lifecycle §6.1), `GetWallet`, `ListLedger`, `GetTransaction`, `GetTransactionByExternalId` e `Reconcile`.
+- `app`: `OpenWallet`, `ProcessWagerTransaction` (pipeline do lifecycle §6.1), `GetWallet`, `ListLedger`, `GetTransaction`, `GetTransactionByExternalId` e `Reconcile`. Os casos de uso chamam `wagering.NewCommand`, `CheckIdempotency`, `Settle` e `OpenWallet` e selam os eventos com `events.Seal`.
+- **Tradução de erros do domínio:** o `app` mapeia explicitamente os erros de invariante (`money.ErrOverflow`, `wagering.ErrInvalidSnapshot`, `ErrInvalidArgument`, `ErrInvalidTransition`, `wallet.ErrInvalidLedgerEntry`…) para `apperrors.KindPermanent`, e `*ValidationError`/`*ConflictError` para `KindInput`/`KindConflict`. Sem isso, pela D-05, eles seriam tratados como transitórios.
 - `auth`: verificador OIDC com `OIDC_ISSUER` separado de `OIDC_JWKS_URL`, `Principal`, roles e regras da matriz D-07.
 - **Spec do marco = contrato primeiro (D-20):** `api/openapi.yaml` escrito e aprovado **antes** dos handlers, junto com `api/requests.http`.
 - `httpapi`: as 9 rotas, DTOs, `problem+json`, middlewares de correlação, log e auth, limite de corpo e `DisallowUnknownFields`. Também `GET /docs` (Swagger UI) e `GET /openapi.yaml`.
@@ -107,7 +110,7 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 
 #### M6 — Worker de referências (~1,5 h)
 
-- Adapter `references`: claim, lock carteira → transação, reavaliação, reagendamento e expiração; antecipação das pendências dependentes no caso de uso.
+- Adapter `references`: claim, lock carteira → transação e chamada ao `wagering.Settle` (reavaliação, reagendamento e expiração já estão no domínio desde o M1); antecipação das pendências dependentes no caso de uso.
 - Testes I06 e I11 (reversões completas).
 
 **Cobre:** OPS-12..14, TX-09.
@@ -186,6 +189,8 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | Keycloak lento para subir (30–60 s) | Timeout no `compose up` | Healthcheck em `/health/ready` do Keycloak, `--wait` e `start_period` generoso |
 | Testes de concorrência instáveis | Falhas intermitentes | Barreira de largada, `Eventually` com prazo e repetição N× com carteiras novas (test-plan §1) |
 | Deadlock entre o worker de referências e o HTTP | `40P01` nos testes | Ordem fixa de lock: carteira → transação ([`data-model.md`](data-model.md) §6) |
+| Relógios divergentes entre instâncias | `updated_at < created_at` rejeitado pelo banco ou na reidratação | ✅ Tratado no M1: `updatedAt` tem `createdAt` como piso (`TestTransitionClockSkew`, `TestWalletDebit`) |
+| Erro de invariante do domínio tratado como transitório (D-05) | 503 repetido em vez de `FAILED` | Tradução explícita para `KindPermanent` no `app` (M3) |
 | Estouro de prazo | Checkpoint do dia não atingido | Ordem de corte (§4), sempre preservando os eliminatórios |
 
 ---
@@ -196,7 +201,7 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | --- | --- | --- |
 | E1 Autenticação efetiva | M3 | M3 (A01) |
 | E2 Acesso não autorizado | M3 | M3 (A02, A03) |
-| E3 Ponto flutuante | M1 | M1 (U01) |
+| E3 Ponto flutuante | M1 ✅ | M1 (U01a–g, com o U01g analisando a AST) |
 | E4 Saldo negativo por concorrência | M2 + M3 | M3 (C02 em processo), M8 (C02, C10b) |
 | E5 Movimentação duplicada | M3 + M5 | M5 (I04a), M8 (C01, C05, C10) |
 | E6 Idempotência só em memória | M2 + M3 | M6 (I06), M8 (C08) |

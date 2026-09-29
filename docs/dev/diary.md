@@ -45,7 +45,7 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
 
 ## Onde paramos
 
-- **M1 concluído** (aguardando a autorização dos commits). Próximo passo: **M2, persistência** (migrations, repositórios, UoW e testes I01–I03, I16), começando pela spec.
+- **M1 concluído e commitado.** Próximo passo: **M2, persistência** (migrations, repositórios, UoW e testes I01–I03, I16), começando pela spec.
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - decidir se os 3 minors do M0 entram em algum marco.
