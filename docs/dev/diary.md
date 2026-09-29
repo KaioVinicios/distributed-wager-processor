@@ -35,9 +35,18 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
   - réplicas sem `restart:` no compose;
   - logs do Fx em nível INFO.
 
+## 29/09/2026 (ter): M1, domínio com TDD
+
+- [Spec](specs/2026-09-29-m1-domain-design.md) → [plano](plans/2026-09-29-m1-domain.md) → execução com TDD.
+- **Abordagem A:** o domínio decide e aplica (`wagering.Settle` e `wagering.OpenWallet`); o `app` do M3 só fará I/O.
+- **Pacotes:** `ident`, `money`, `wallet`, `events`, `wagering` e `apperrors`, com a tabela U do test-plan (exceto o U09b, do M2).
+- **Decisões novas** (em `decisions.md`): erro não classificado é transitório; chave de idempotência em ASCII visível; IDs do domínio como string canônica; `eventId` atribuído no `Seal`.
+- **Achado na validação do plano:** relógio de outra instância atrás do `createdAt` viraria falha permanente; `updatedAt` passou a ter `createdAt` como piso.
+
 ## Onde paramos
 
-- **M0 concluído e commitado.** Próximo passo: **M1, domínio com TDD** (`money`, `wallet`, `wagering`, `events` e `apperrors`; tabela U do `test-plan.md`), começando pela spec com `superpowers:brainstorming`.
+- **M1 concluído** (aguardando a autorização dos commits). Próximo passo: **M2, persistência** (migrations, repositórios, UoW e testes I01–I03, I16), começando pela spec.
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - decidir se os 3 minors do M0 entram em algum marco.
+  - **para a spec do M3:** o `app` precisa traduzir explicitamente os erros de invariante do domínio (`money.ErrOverflow`, `wagering.ErrInvalidSnapshot`, `ErrInvalidArgument`, `ErrInvalidTransition`, `wallet.ErrInvalidLedgerEntry`…) para `apperrors.KindPermanent`; pela D-05, um erro não classificado seria tratado como transitório.
