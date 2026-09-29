@@ -13,9 +13,23 @@ import (
 var allVars = []string{
 	"LOG_LEVEL", "HTTP_ADDR", "METRICS_ADDR", "SHUTDOWN_TIMEOUT", "DATABASE_URL",
 	"DB_MAX_CONNS", "DB_LOCK_TIMEOUT", "SQS_WAGER_QUEUE_NAME", "SQS_WAGER_DLQ_NAME",
+	"OIDC_ISSUER", "OIDC_JWKS_URL", "OIDC_AUDIENCE", "OIDC_CLOCK_SKEW", "API_DOCS_ENABLED",
+	"REFERENCE_RETRY_BASE_DELAY", "REFERENCE_RETRY_MAX_DELAY", "REFERENCE_MAX_ATTEMPTS", "REFERENCE_TTL",
 }
 
-const validURL = "postgres://pda_app:s3cr3t@localhost:5432/pda?sslmode=disable"
+const (
+	validURL    = "postgres://pda_app:s3cr3t@localhost:5432/pda?sslmode=disable"
+	validIssuer = "http://localhost:8080/realms/pda"
+	validJWKS   = "http://keycloak:8080/realms/pda/protocol/openid-connect/certs"
+)
+
+// setRequired sets the variables without a default.
+func setRequired(t *testing.T) {
+	t.Helper()
+	t.Setenv("DATABASE_URL", validURL)
+	t.Setenv("OIDC_ISSUER", validIssuer)
+	t.Setenv("OIDC_JWKS_URL", validJWKS)
+}
 
 // cleanEnv unsets every config variable for the test, restoring them afterwards.
 func cleanEnv(t *testing.T) {
@@ -33,6 +47,10 @@ func validConfig() config.Config {
 		LogLevel: "info", HTTPAddr: ":8080", MetricsAddr: ":9090",
 		ShutdownTimeout: 20 * time.Second, DatabaseURL: validURL, DBMaxConns: 10, DBLockTimeout: 5 * time.Second,
 		WagerQueueName: "wager-transactions.fifo", WagerDLQName: "wager-transactions-dlq.fifo",
+		OIDCIssuer: validIssuer, OIDCJWKSURL: validJWKS, OIDCAudience: "pda-api", OIDCClockSkew: 30 * time.Second,
+		APIDocsEnabled:          true,
+		ReferenceRetryBaseDelay: time.Second, ReferenceRetryMaxDelay: time.Minute, ReferenceMaxAttempts: 8,
+		ReferenceTTL: 10 * time.Minute,
 	}
 }
 
@@ -68,7 +86,7 @@ func vars(err error) []string {
 // Covers: FX-02
 func TestLoad_AppliesDefaults(t *testing.T) {
 	cleanEnv(t)
-	t.Setenv("DATABASE_URL", validURL)
+	setRequired(t)
 
 	got, err := config.Load()
 	if err != nil {
@@ -89,6 +107,10 @@ func TestLoad_ReadsEnvironment(t *testing.T) {
 		"LOG_LEVEL": "debug", "HTTP_ADDR": ":18080", "METRICS_ADDR": ":19090",
 		"SHUTDOWN_TIMEOUT": "5s", "DATABASE_URL": "postgresql://u:p@db:5432/x",
 		"DB_MAX_CONNS": "4", "DB_LOCK_TIMEOUT": "2s", "SQS_WAGER_QUEUE_NAME": "w.fifo", "SQS_WAGER_DLQ_NAME": "d.fifo",
+		"OIDC_ISSUER": "https://idp.example/realms/x", "OIDC_JWKS_URL": "https://idp.internal/certs",
+		"OIDC_AUDIENCE": "api", "OIDC_CLOCK_SKEW": "1s", "API_DOCS_ENABLED": "false",
+		"REFERENCE_RETRY_BASE_DELAY": "100ms", "REFERENCE_RETRY_MAX_DELAY": "1s", "REFERENCE_MAX_ATTEMPTS": "3",
+		"REFERENCE_TTL": "3s",
 	}
 	for k, v := range env {
 		t.Setenv(k, v)
@@ -102,6 +124,10 @@ func TestLoad_ReadsEnvironment(t *testing.T) {
 		LogLevel: "debug", HTTPAddr: ":18080", MetricsAddr: ":19090", ShutdownTimeout: 5 * time.Second,
 		DatabaseURL: "postgresql://u:p@db:5432/x", DBMaxConns: 4, DBLockTimeout: 2 * time.Second,
 		WagerQueueName: "w.fifo", WagerDLQName: "d.fifo",
+		OIDCIssuer: "https://idp.example/realms/x", OIDCJWKSURL: "https://idp.internal/certs",
+		OIDCAudience: "api", OIDCClockSkew: time.Second, APIDocsEnabled: false,
+		ReferenceRetryBaseDelay: 100 * time.Millisecond, ReferenceRetryMaxDelay: time.Second,
+		ReferenceMaxAttempts: 3, ReferenceTTL: 3 * time.Second,
 	}
 	if got != want {
 		t.Fatalf("Load() = %+v, want %+v", got, want)
@@ -109,12 +135,12 @@ func TestLoad_ReadsEnvironment(t *testing.T) {
 }
 
 // Covers: FX-02
-func TestLoad_RequiresDatabaseURL(t *testing.T) {
+func TestLoad_RequiresURLs(t *testing.T) {
 	cleanEnv(t)
 
 	_, err := config.Load()
-	if got := vars(err); len(got) != 1 || got[0] != "DATABASE_URL" {
-		t.Fatalf("Load() error vars = %v, want [DATABASE_URL] (err = %v)", got, err)
+	if got := strings.Join(vars(err), ","); got != "DATABASE_URL,OIDC_ISSUER,OIDC_JWKS_URL" {
+		t.Fatalf("Load() error vars = %s, want DATABASE_URL,OIDC_ISSUER,OIDC_JWKS_URL (err = %v)", got, err)
 	}
 }
 
@@ -140,6 +166,18 @@ func TestValidate_RejectsInvalidValues(t *testing.T) {
 		{"non-fifo queue", func(c *config.Config) { c.WagerQueueName = "wager" }, "SQS_WAGER_QUEUE_NAME"},
 		{"non-fifo dlq", func(c *config.Config) { c.WagerDLQName = "dlq" }, "SQS_WAGER_DLQ_NAME"},
 		{"dlq equals queue", func(c *config.Config) { c.WagerDLQName = c.WagerQueueName }, "SQS_WAGER_DLQ_NAME"},
+		{"missing issuer", func(c *config.Config) { c.OIDCIssuer = "" }, "OIDC_ISSUER"},
+		{"relative issuer", func(c *config.Config) { c.OIDCIssuer = "/realms/pda" }, "OIDC_ISSUER"},
+		{"issuer not http", func(c *config.Config) { c.OIDCIssuer = "ftp://idp/realms/pda" }, "OIDC_ISSUER"},
+		{"missing jwks url", func(c *config.Config) { c.OIDCJWKSURL = "" }, "OIDC_JWKS_URL"},
+		{"unparsable jwks url", func(c *config.Config) { c.OIDCJWKSURL = "http://idp:bad port/certs" }, "OIDC_JWKS_URL"},
+		{"empty audience", func(c *config.Config) { c.OIDCAudience = "" }, "OIDC_AUDIENCE"},
+		{"negative clock skew", func(c *config.Config) { c.OIDCClockSkew = -time.Second }, "OIDC_CLOCK_SKEW"},
+		{"zero base delay", func(c *config.Config) { c.ReferenceRetryBaseDelay = 0 }, "REFERENCE_RETRY_BASE_DELAY"},
+		{"max below base", func(c *config.Config) { c.ReferenceRetryMaxDelay = c.ReferenceRetryBaseDelay / 2 }, "REFERENCE_RETRY_MAX_DELAY"},
+		{"max above a day", func(c *config.Config) { c.ReferenceRetryMaxDelay = 25 * time.Hour }, "REFERENCE_RETRY_MAX_DELAY"},
+		{"zero attempts", func(c *config.Config) { c.ReferenceMaxAttempts = 0 }, "REFERENCE_MAX_ATTEMPTS"},
+		{"zero ttl", func(c *config.Config) { c.ReferenceTTL = 0 }, "REFERENCE_TTL"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -173,6 +211,15 @@ func TestValidate_ReportsAllErrorsAtOnce(t *testing.T) {
 	}
 }
 
+// Covers: FX-02
+func TestValidate_AcceptsZeroClockSkew(t *testing.T) {
+	cfg := validConfig()
+	cfg.OIDCClockSkew = 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
 // Covers: OBS-02
 func TestLoad_ErrorsNeverContainValues(t *testing.T) {
 	cases := []struct {
@@ -182,11 +229,13 @@ func TestLoad_ErrorsNeverContainValues(t *testing.T) {
 		{"unparsable duration", "SHUTDOWN_TIMEOUT", "abc123xyz", "abc123xyz", "SHUTDOWN_TIMEOUT"},
 		{"unparsable int", "DB_MAX_CONNS", "ten-conns-99", "ten-conns-99", "DB_MAX_CONNS"},
 		{"unparsable lock timeout", "DB_LOCK_TIMEOUT", "forever-77", "forever-77", "DB_LOCK_TIMEOUT"},
+		{"credentials in issuer", "OIDC_ISSUER", "ftp://admin:IssuerSecret7@idp/realms/pda", "IssuerSecret7", "OIDC_ISSUER"},
+		{"unparsable flag", "API_DOCS_ENABLED", "maybe-42", "maybe-42", "API_DOCS_ENABLED"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cleanEnv(t)
-			t.Setenv("DATABASE_URL", validURL)
+			setRequired(t)
 			t.Setenv(tc.key, tc.value)
 
 			_, err := config.Load()

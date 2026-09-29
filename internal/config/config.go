@@ -27,6 +27,22 @@ type Config struct {
 	DBLockTimeout   time.Duration `env:"DB_LOCK_TIMEOUT" envDefault:"5s"`
 	WagerQueueName  string        `env:"SQS_WAGER_QUEUE_NAME" envDefault:"wager-transactions.fifo"`
 	WagerDLQName    string        `env:"SQS_WAGER_DLQ_NAME" envDefault:"wager-transactions-dlq.fifo"`
+
+	// OIDC (D-07): the expected iss and where the keys are fetched are
+	// separate, because the issuer seen by clients (localhost) differs from
+	// the address reachable inside the compose network (keycloak).
+	OIDCIssuer    string        `env:"OIDC_ISSUER"`
+	OIDCJWKSURL   string        `env:"OIDC_JWKS_URL"`
+	OIDCAudience  string        `env:"OIDC_AUDIENCE" envDefault:"pda-api"`
+	OIDCClockSkew time.Duration `env:"OIDC_CLOCK_SKEW" envDefault:"30s"`
+
+	APIDocsEnabled bool `env:"API_DOCS_ENABLED" envDefault:"true"`
+
+	// Schedule of pending references (D-11).
+	ReferenceRetryBaseDelay time.Duration `env:"REFERENCE_RETRY_BASE_DELAY" envDefault:"1s"`
+	ReferenceRetryMaxDelay  time.Duration `env:"REFERENCE_RETRY_MAX_DELAY" envDefault:"60s"`
+	ReferenceMaxAttempts    int           `env:"REFERENCE_MAX_ATTEMPTS" envDefault:"8"`
+	ReferenceTTL            time.Duration `env:"REFERENCE_TTL" envDefault:"10m"`
 }
 
 // Load reads the environment and validates it. Errors name variables, never values.

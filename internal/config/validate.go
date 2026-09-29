@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // FieldError reports an invalid variable by name. It never carries the value.
@@ -54,7 +55,47 @@ func (c Config) Validate() error {
 	case c.WagerDLQName == c.WagerQueueName:
 		fail("SQS_WAGER_DLQ_NAME", "must differ from SQS_WAGER_QUEUE_NAME")
 	}
+	if reason := httpURLProblem(c.OIDCIssuer); reason != "" {
+		fail("OIDC_ISSUER", reason)
+	}
+	if reason := httpURLProblem(c.OIDCJWKSURL); reason != "" {
+		fail("OIDC_JWKS_URL", reason)
+	}
+	if c.OIDCAudience == "" {
+		fail("OIDC_AUDIENCE", "must not be empty")
+	}
+	if c.OIDCClockSkew < 0 {
+		fail("OIDC_CLOCK_SKEW", "must not be negative")
+	}
+	if c.ReferenceRetryBaseDelay <= 0 {
+		fail("REFERENCE_RETRY_BASE_DELAY", "must be greater than 0")
+	}
+	if c.ReferenceRetryMaxDelay < c.ReferenceRetryBaseDelay || c.ReferenceRetryMaxDelay > maxReferenceRetryDelay {
+		fail("REFERENCE_RETRY_MAX_DELAY", "must be between REFERENCE_RETRY_BASE_DELAY and "+maxReferenceRetryDelay.String())
+	}
+	if c.ReferenceMaxAttempts < 1 {
+		fail("REFERENCE_MAX_ATTEMPTS", "must be at least 1")
+	}
+	if c.ReferenceTTL <= 0 {
+		fail("REFERENCE_TTL", "must be greater than 0")
+	}
 	return errors.Join(errs...)
+}
+
+// maxReferenceRetryDelay is the upper bound wagering.NewReferenceRetryPolicy accepts.
+const maxReferenceRetryDelay = 24 * time.Hour
+
+// httpURLProblem returns why raw is not an absolute http(s) URL, or "" if it is.
+// Like databaseURLProblem, it never echoes the value.
+func httpURLProblem(raw string) string {
+	if raw == "" {
+		return "is required"
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "must be an absolute http or https URL"
+	}
+	return ""
 }
 
 // databaseURLProblem returns why raw is unusable, or "" if it is fine.
