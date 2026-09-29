@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "ConsumeWagerQueue", "Effect": "Allow",
+      "Action": ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"],
+      "Resource": "${WAGER_QUEUE_ARN}" },
+    { "Sid": "SendToDLQ", "Effect": "Allow",
+      "Action": ["sqs:SendMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"],
+      "Resource": "${DLQ_ARN}" },
+    { "Sid": "PublishEvents", "Effect": "Allow",
+      "Action": "sns:Publish",
+      "Resource": "${TOPIC_ARN}" }
+  ]
+}

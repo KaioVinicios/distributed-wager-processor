@@ -1,0 +1,49 @@
+{
+  "realm": "other",
+  "enabled": true,
+  "defaultDefaultClientScopes": ["roles"],
+  "defaultOptionalClientScopes": [],
+  "clientScopes": [
+    {
+      "name": "roles",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "false", "display.on.consent.screen": "false" },
+      "protocolMappers": [
+        {
+          "name": "client roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-client-role-mapper",
+          "config": { "multivalued": "true", "claim.name": "resource_access.${client_id}.roles", "jsonType.label": "String",
+                      "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false" }
+        }
+      ]
+    }
+  ],
+  "roles": { "client": { "pda-api": [ { "name": "provider" } ] } },
+  "clients": [
+    { "clientId": "pda-api", "enabled": true, "bearerOnly": true, "publicClient": false, "standardFlowEnabled": false },
+    {
+      "clientId": "other-provider",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${OTHER_PROVIDER_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": ["roles"],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        { "name": "provider_id", "protocol": "openid-connect", "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": { "claim.name": "provider_id", "claim.value": "provider-a", "jsonType.label": "String",
+                      "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false" } },
+        { "name": "aud-pda-api", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "pda-api", "access.token.claim": "true", "id.token.claim": "false" } }
+      ]
+    }
+  ],
+  "users": [
+    { "username": "service-account-other-provider", "enabled": true, "serviceAccountClientId": "other-provider", "clientRoles": { "pda-api": ["provider"] } }
+  ]
+}

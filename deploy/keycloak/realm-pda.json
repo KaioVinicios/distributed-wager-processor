@@ -1,0 +1,173 @@
+{
+  "realm": "pda",
+  "enabled": true,
+  "accessTokenLifespan": 300,
+  "defaultDefaultClientScopes": ["roles"],
+  "defaultOptionalClientScopes": [],
+  "clientScopes": [
+    {
+      "name": "roles",
+      "description": "Client roles only. The default 'audience resolve' mapper is deliberately absent (D-07): aud comes only from explicit audience mappers.",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "false", "display.on.consent.screen": "false" },
+      "protocolMappers": [
+        {
+          "name": "client roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-client-role-mapper",
+          "config": {
+            "multivalued": "true",
+            "claim.name": "resource_access.${client_id}.roles",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "roles": {
+    "client": {
+      "pda-api": [
+        { "name": "provider", "description": "Game provider: submits and reads its own wager transactions" },
+        { "name": "wallet-internal", "description": "Internal wallet service: manages wallets and reads everything" }
+      ]
+    }
+  },
+  "clients": [
+    {
+      "clientId": "pda-api",
+      "name": "PDA API (resource server)",
+      "enabled": true,
+      "bearerOnly": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    },
+    {
+      "clientId": "provider-a",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${PROVIDER_A_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "webOrigins": ["http://localhost:8081", "http://localhost:8082", "http://localhost:8083"],
+      "defaultClientScopes": ["roles"],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        { "name": "provider_id", "protocol": "openid-connect", "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": { "claim.name": "provider_id", "claim.value": "provider-a", "jsonType.label": "String",
+                      "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false" } },
+        { "name": "aud-pda-api", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "pda-api", "access.token.claim": "true", "id.token.claim": "false" } }
+      ]
+    },
+    {
+      "clientId": "provider-b",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${PROVIDER_B_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "webOrigins": ["http://localhost:8081", "http://localhost:8082", "http://localhost:8083"],
+      "defaultClientScopes": ["roles"],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        { "name": "provider_id", "protocol": "openid-connect", "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": { "claim.name": "provider_id", "claim.value": "provider-b", "jsonType.label": "String",
+                      "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false" } },
+        { "name": "aud-pda-api", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "pda-api", "access.token.claim": "true", "id.token.claim": "false" } }
+      ]
+    },
+    {
+      "clientId": "wallet-service",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${WALLET_SERVICE_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "webOrigins": ["http://localhost:8081", "http://localhost:8082", "http://localhost:8083"],
+      "defaultClientScopes": ["roles"],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        { "name": "aud-pda-api", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "pda-api", "access.token.claim": "true", "id.token.claim": "false" } }
+      ]
+    },
+    {
+      "clientId": "no-role-client",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${NO_ROLE_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": ["roles"],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        { "name": "aud-pda-api", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "pda-api", "access.token.claim": "true", "id.token.claim": "false" } }
+      ]
+    },
+    {
+      "clientId": "no-audience-client",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${NO_AUDIENCE_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": ["roles"],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        { "name": "provider_id", "protocol": "openid-connect", "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": { "claim.name": "provider_id", "claim.value": "provider-a", "jsonType.label": "String",
+                      "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false" } }
+      ]
+    },
+    {
+      "clientId": "provider-short-lived",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${PROVIDER_SHORT_LIVED_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "attributes": { "access.token.lifespan": "5" },
+      "defaultClientScopes": ["roles"],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        { "name": "provider_id", "protocol": "openid-connect", "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": { "claim.name": "provider_id", "claim.value": "provider-a", "jsonType.label": "String",
+                      "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false" } },
+        { "name": "aud-pda-api", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "pda-api", "access.token.claim": "true", "id.token.claim": "false" } }
+      ]
+    }
+  ],
+  "users": [
+    { "username": "service-account-provider-a", "enabled": true, "serviceAccountClientId": "provider-a", "clientRoles": { "pda-api": ["provider"] } },
+    { "username": "service-account-provider-b", "enabled": true, "serviceAccountClientId": "provider-b", "clientRoles": { "pda-api": ["provider"] } },
+    { "username": "service-account-wallet-service", "enabled": true, "serviceAccountClientId": "wallet-service", "clientRoles": { "pda-api": ["wallet-internal"] } },
+    { "username": "service-account-no-role-client", "enabled": true, "serviceAccountClientId": "no-role-client" },
+    { "username": "service-account-no-audience-client", "enabled": true, "serviceAccountClientId": "no-audience-client", "clientRoles": { "pda-api": ["provider"] } },
+    { "username": "service-account-provider-short-lived", "enabled": true, "serviceAccountClientId": "provider-short-lived", "clientRoles": { "pda-api": ["provider"] } }
+  ]
+}
