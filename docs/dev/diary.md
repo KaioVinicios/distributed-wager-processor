@@ -63,11 +63,31 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
   - os triggers disparam antes dos `CHECK`, por isso o I02a roda com eles desligados.
 - **Prova central:** o I17 grava todos os tipos (abertura, BET, WIN, LOSS, REFUND, ROLLBACK, rejeições e pendência resolvida) pelos repositórios, e o domínio do M1 e o schema concordam em tudo.
 
+## 29/09/2026 (ter): M3, contrato, casos de uso, HTTP e autenticação
+
+- [Spec](specs/2026-09-29-m3-contract-http-auth-design.md) (com o [`api/openapi.yaml`](../../api/openapi.yaml)) → [plano](plans/2026-09-29-m3-contract-http-auth.md) → execução inline com TDD.
+- **Validação do plano:** todo o código foi escrito e testado numa cópia descartável antes do plano. Depois, o plano foi reaplicado do zero numa segunda cópia, passo a passo (red → green); o resultado ficou idêntico ao validado, e a execução no repositório repetiu os mesmos reds e greens.
+- **Entregue:**
+  - os casos de uso `OpenWallet`, `ProcessWager` (com `FAILED` em UoW separada e retentativa das corridas), `Queries` e `Reconcile`;
+  - o `auth`, com go-oidc, a matriz D-07 e o fail fast do JWKS;
+  - o `httpapi`, com as 9 rotas, `problem+json`, os middlewares e os docs;
+  - o `testkit`: app em processo, contrato validado em toda troca e consistência completa do test-plan §6.
+- **Achado central:** 50 apostas iguais em paralelo às vezes geravam um 409 indevido, porque uma entrega confirmava entre as duas leituras de idempotência. Foi corrigido no `lookup`, com teste determinístico (decisão 23 da spec).
+- **Outros achados da validação:**
+  - a ordem dos middlewares;
+  - as filas isoladas passam a ser criadas pelo `StartApp`;
+  - a regra do `depguard` do `app` exclui os testes;
+  - o go-oidc compara o `exp` sem tolerância, então a tolerância virou `OIDC_CLOCK_SKEW`.
+- **Prova final:**
+  - `make check` e `make test-integration` verdes, com três execuções estáveis;
+  - cinco sabotagens detectadas;
+  - compose com as 3 réplicas saudáveis e o fluxo por `curl` distribuído entre elas.
+
 ## Onde paramos
 
-- **M2 concluído (commits aguardando autorização).** Próximo passo: **M3, contrato, casos de uso, HTTP e autenticação**, começando pela spec (contrato `api/openapi.yaml` primeiro, D-20).
+- **M3 concluído (commits aguardando autorização).** Próximo passo: **M4, outbox publisher**, começando pela spec.
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - decidir se os 3 minors do M0 entram em algum marco;
-  - minors adiados na revisão do M2: `Ledger.List`/`Sum` e `AdvanceDependents` sem filtro de ID malformado; inbox aceita instantes zerados; repositórios sobre o pool podem escrever fora do UoW (só a convenção da D-14 impede).
-  - **para a spec do M3:** o `app` precisa traduzir explicitamente os erros de invariante do domínio (`money.ErrOverflow`, `wagering.ErrInvalidSnapshot`, `ErrInvalidArgument`, `ErrInvalidTransition`, `wallet.ErrInvalidLedgerEntry`…) para `apperrors.KindPermanent`; pela D-05, um erro não classificado seria tratado como transitório.
+  - minors adiados na revisão do M2: inbox aceita instantes zerados; repositórios sobre o pool podem escrever fora do UoW (só a convenção da D-14 impede). O filtro de ID malformado de `List`/`Sum`/`AdvanceDependents` ficou resolvido no M3, pelos casos de uso (decisão 8);
+  - minors adiados na revisão do M3: o log de acesso grava `route` vazio para rotas inexistentes; o WARN da reconciliação registra os três saldos (confirmar a política no I14 do M7); o `settleAndPersist` com `insert = false` só ganha teste no M6.
