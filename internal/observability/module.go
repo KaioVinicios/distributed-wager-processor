@@ -12,6 +12,7 @@ var Module = fx.Module("observability",
 	fx.Provide(
 		NewLogger,
 		NewRegistry,
+		NewMetrics,
 		fx.Annotate(
 			func(log *slog.Logger, checkers []Checker) *Health {
 				return NewHealth(log, checkers, DefaultCheckTimeout)
