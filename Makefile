@@ -10,7 +10,7 @@ GOVULNCHECK_VERSION ?= v1.8.0
 COMPOSE ?= docker compose
 INFRA_SERVICES := postgres keycloak ministack
 
-.PHONY: up down infra-up fmt fmt-check lint vet vuln tidy-check go-version-check test test-integration check
+.PHONY: up down infra-up migrate-up migrate-down fmt fmt-check lint vet vuln tidy-check go-version-check test test-integration check
 
 up:
 	$(COMPOSE) up --build
@@ -18,10 +18,20 @@ up:
 down:
 	$(COMPOSE) down -v
 
-# aws-init is one-shot: it runs once ministack is healthy.
+# aws-init and migrate are one-shot: they run once their dependencies are healthy.
 infra-up:
 	$(COMPOSE) up -d --wait $(INFRA_SERVICES)
 	$(COMPOSE) up aws-init --exit-code-from aws-init
+	$(COMPOSE) up migrate --exit-code-from migrate
+
+# Applies every pending migration (data-model §7).
+migrate-up:
+	$(COMPOSE) run --rm migrate up
+
+# Reverts the last N migrations (default 1).
+N ?= 1
+migrate-down:
+	$(COMPOSE) run --rm migrate down $(N)
 
 fmt:
 	$(GOLANGCI_LINT) fmt

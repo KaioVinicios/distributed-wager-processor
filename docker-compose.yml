@@ -22,6 +22,8 @@ x-app: &app
   depends_on:
     postgres:
       condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
     aws-init:
       condition: service_completed_successfully
   healthcheck:
@@ -44,6 +46,19 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # Applies migrations/ as pda_owner (data-model §7). The URL comes from the
+  # env_file, which compose does not interpolate, so a shell expands it.
+  migrate:
+    image: migrate/migrate:v4.20.1
+    <<: *env-files
+    entrypoint: ["sh", "-c", "exec migrate -path /migrations -database \"$$DATABASE_OWNER_URL\" \"$$@\"", "migrate"]
+    command: ["up"]
+    volumes:
+      - ./migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.7.4
