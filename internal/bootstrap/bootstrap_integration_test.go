@@ -28,7 +28,11 @@ func integrationConfig(t *testing.T) config.Config {
 	cfg := config.Config{
 		LogLevel: "error", HTTPAddr: testkit.FreeAddr(t), MetricsAddr: testkit.FreeAddr(t),
 		ShutdownTimeout: 5 * time.Second, DatabaseURL: testkit.AppDatabaseURL(t), DBMaxConns: 2,
-		WagerQueueName: wager, WagerDLQName: dlq,
+		DBLockTimeout: 2 * time.Second, WagerQueueName: wager, WagerDLQName: dlq,
+		OIDCIssuer: testkit.KeycloakIssuer, OIDCJWKSURL: testkit.KeycloakIssuer + "/protocol/openid-connect/certs",
+		OIDCAudience: "pda-api", OIDCClockSkew: time.Second, APIDocsEnabled: true,
+		ReferenceRetryBaseDelay: 100 * time.Millisecond, ReferenceRetryMaxDelay: time.Second,
+		ReferenceMaxAttempts: 3, ReferenceTTL: 3 * time.Second,
 	}
 	t.Setenv("DATABASE_URL", cfg.DatabaseURL) // config.Load stays valid even if Fx calls it
 	return cfg
@@ -85,7 +89,7 @@ func TestFxLifecycle(t *testing.T) {
 	}
 }
 
-// Covers: FX-02 (I07c)
+// Covers: FX-02, AUTH-02 (I07c)
 func TestFxFailFast(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -96,6 +100,7 @@ func TestFxFailFast(t *testing.T) {
 			c.DatabaseURL = "postgres://pda_app:x@127.0.0.1:1/pda?sslmode=disable&connect_timeout=2"
 		}, "postgres"},
 		{"missing queue", func(c *config.Config) { c.WagerQueueName = "missing-" + c.WagerQueueName }, "missing-"},
+		{"unreachable identity provider", func(c *config.Config) { c.OIDCJWKSURL = "http://127.0.0.1:1/certs" }, "JWKS"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

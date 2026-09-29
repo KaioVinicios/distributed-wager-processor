@@ -10,6 +10,7 @@ import (
 	"github.com/KaioVinicios/pda/internal/adapters/awsclient"
 	"github.com/KaioVinicios/pda/internal/adapters/httpapi"
 	"github.com/KaioVinicios/pda/internal/adapters/postgres"
+	"github.com/KaioVinicios/pda/internal/auth"
 	"github.com/KaioVinicios/pda/internal/config"
 	"github.com/KaioVinicios/pda/internal/observability"
 )
@@ -24,6 +25,8 @@ func Options() []fx.Option {
 		observability.Module,
 		postgres.Module,
 		awsclient.Module,
+		auth.Module,
+		appModule,
 		httpapi.Module,
 	}
 }
