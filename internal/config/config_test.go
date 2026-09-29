@@ -12,7 +12,7 @@ import (
 
 var allVars = []string{
 	"LOG_LEVEL", "HTTP_ADDR", "METRICS_ADDR", "SHUTDOWN_TIMEOUT", "DATABASE_URL",
-	"DB_MAX_CONNS", "SQS_WAGER_QUEUE_NAME", "SQS_WAGER_DLQ_NAME",
+	"DB_MAX_CONNS", "DB_LOCK_TIMEOUT", "SQS_WAGER_QUEUE_NAME", "SQS_WAGER_DLQ_NAME",
 }
 
 const validURL = "postgres://pda_app:s3cr3t@localhost:5432/pda?sslmode=disable"
@@ -31,7 +31,7 @@ func cleanEnv(t *testing.T) {
 func validConfig() config.Config {
 	return config.Config{
 		LogLevel: "info", HTTPAddr: ":8080", MetricsAddr: ":9090",
-		ShutdownTimeout: 20 * time.Second, DatabaseURL: validURL, DBMaxConns: 10,
+		ShutdownTimeout: 20 * time.Second, DatabaseURL: validURL, DBMaxConns: 10, DBLockTimeout: 5 * time.Second,
 		WagerQueueName: "wager-transactions.fifo", WagerDLQName: "wager-transactions-dlq.fifo",
 	}
 }
@@ -88,7 +88,7 @@ func TestLoad_ReadsEnvironment(t *testing.T) {
 	env := map[string]string{
 		"LOG_LEVEL": "debug", "HTTP_ADDR": ":18080", "METRICS_ADDR": ":19090",
 		"SHUTDOWN_TIMEOUT": "5s", "DATABASE_URL": "postgresql://u:p@db:5432/x",
-		"DB_MAX_CONNS": "4", "SQS_WAGER_QUEUE_NAME": "w.fifo", "SQS_WAGER_DLQ_NAME": "d.fifo",
+		"DB_MAX_CONNS": "4", "DB_LOCK_TIMEOUT": "2s", "SQS_WAGER_QUEUE_NAME": "w.fifo", "SQS_WAGER_DLQ_NAME": "d.fifo",
 	}
 	for k, v := range env {
 		t.Setenv(k, v)
@@ -100,7 +100,8 @@ func TestLoad_ReadsEnvironment(t *testing.T) {
 	}
 	want := config.Config{
 		LogLevel: "debug", HTTPAddr: ":18080", MetricsAddr: ":19090", ShutdownTimeout: 5 * time.Second,
-		DatabaseURL: "postgresql://u:p@db:5432/x", DBMaxConns: 4, WagerQueueName: "w.fifo", WagerDLQName: "d.fifo",
+		DatabaseURL: "postgresql://u:p@db:5432/x", DBMaxConns: 4, DBLockTimeout: 2 * time.Second,
+		WagerQueueName: "w.fifo", WagerDLQName: "d.fifo",
 	}
 	if got != want {
 		t.Fatalf("Load() = %+v, want %+v", got, want)
@@ -134,6 +135,8 @@ func TestValidate_RejectsInvalidValues(t *testing.T) {
 		{"missing host", func(c *config.Config) { c.DatabaseURL = "postgres:///pda" }, "DATABASE_URL"},
 		{"unparsable url", func(c *config.Config) { c.DatabaseURL = "postgres://u:p@h:bad port/db" }, "DATABASE_URL"},
 		{"zero max conns", func(c *config.Config) { c.DBMaxConns = 0 }, "DB_MAX_CONNS"},
+		{"zero lock timeout", func(c *config.Config) { c.DBLockTimeout = 0 }, "DB_LOCK_TIMEOUT"},
+		{"negative lock timeout", func(c *config.Config) { c.DBLockTimeout = -time.Second }, "DB_LOCK_TIMEOUT"},
 		{"non-fifo queue", func(c *config.Config) { c.WagerQueueName = "wager" }, "SQS_WAGER_QUEUE_NAME"},
 		{"non-fifo dlq", func(c *config.Config) { c.WagerDLQName = "dlq" }, "SQS_WAGER_DLQ_NAME"},
 		{"dlq equals queue", func(c *config.Config) { c.WagerDLQName = c.WagerQueueName }, "SQS_WAGER_DLQ_NAME"},
@@ -178,6 +181,7 @@ func TestLoad_ErrorsNeverContainValues(t *testing.T) {
 		{"password in invalid url", "DATABASE_URL", "mysql://pda_app:SuperSecret42@h/db", "SuperSecret42", "DATABASE_URL"},
 		{"unparsable duration", "SHUTDOWN_TIMEOUT", "abc123xyz", "abc123xyz", "SHUTDOWN_TIMEOUT"},
 		{"unparsable int", "DB_MAX_CONNS", "ten-conns-99", "ten-conns-99", "DB_MAX_CONNS"},
+		{"unparsable lock timeout", "DB_LOCK_TIMEOUT", "forever-77", "forever-77", "DB_LOCK_TIMEOUT"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

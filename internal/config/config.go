@@ -24,6 +24,7 @@ type Config struct {
 	ShutdownTimeout time.Duration `env:"SHUTDOWN_TIMEOUT" envDefault:"20s"`
 	DatabaseURL     string        `env:"DATABASE_URL"`
 	DBMaxConns      int32         `env:"DB_MAX_CONNS" envDefault:"10"`
+	DBLockTimeout   time.Duration `env:"DB_LOCK_TIMEOUT" envDefault:"5s"`
 	WagerQueueName  string        `env:"SQS_WAGER_QUEUE_NAME" envDefault:"wager-transactions.fifo"`
 	WagerDLQName    string        `env:"SQS_WAGER_DLQ_NAME" envDefault:"wager-transactions-dlq.fifo"`
 }

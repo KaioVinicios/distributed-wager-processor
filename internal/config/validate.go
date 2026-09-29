@@ -42,6 +42,9 @@ func (c Config) Validate() error {
 	if c.DBMaxConns < 1 {
 		fail("DB_MAX_CONNS", "must be at least 1")
 	}
+	if c.DBLockTimeout <= 0 {
+		fail("DB_LOCK_TIMEOUT", "must be greater than 0")
+	}
 	if !strings.HasSuffix(c.WagerQueueName, ".fifo") {
 		fail("SQS_WAGER_QUEUE_NAME", "must end with .fifo")
 	}
