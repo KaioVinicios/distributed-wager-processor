@@ -20,7 +20,8 @@ pda/
 │
 ├── cmd/
 │   └── pda/
-│       └── main.go                         # entrypoint: fx.New(bootstrap.Options()...).Run()
+│       ├── main.go                         # entrypoint: fx.New(bootstrap.Options()...).Run()
+│       └── healthcheck.go                  # `pda healthcheck`: sonda /health/ready (healthcheck do compose; imagem distroless)
 │
 ├── internal/
 │   ├── bootstrap/                          # composição Fx (único lugar que conhece todos os módulos)
@@ -121,7 +122,8 @@ pda/
 │   │   │   ├── module.go
 │   │   │   └── *_test.go
 │   │   ├── awsclient/
-│   │   │   ├── config.go                   # aws.Config: endpoint MiniStack, região, credenciais
+│   │   │   ├── config.go                   # aws.Config pela cadeia padrão do SDK (AWS_ENDPOINT_URL, AWS_PROFILE...)
+│   │   │   ├── queues.go                   # resolve e verifica fila e DLQ no OnStart; checker `sqs`
 │   │   │   └── module.go                   # Provide de *sqs.Client e *sns.Client
 │   │   ├── sqsconsumer/
 │   │   │   ├── consumer.go                 # lifecycle, pollers, semáforo, shutdown em 5 passos
@@ -145,7 +147,8 @@ pda/
 │   ├── observability/
 │   │   ├── logger.go                       # slog JSON + helpers de atributos (IDs)
 │   │   ├── metrics.go                      # registro Prometheus e catálogo de métricas
-│   │   ├── health.go                       # checkers (PostgreSQL, SQS) + estado agregado
+│   │   ├── health.go                       # agregador de checkers (value group Fx); os checkers vêm dos adaptadores
+│   │   ├── httpserver.go                   # ServeOnLifecycle: Listen síncrono no OnStart, Shutdown no OnStop (API e admin)
 │   │   ├── admin_server.go                 # :9090 /metrics
 │   │   └── module.go
 │   │
@@ -166,11 +169,10 @@ pda/
 ├── deploy/
 │   ├── aws/
 │   │   ├── init.sh                         # filas, DLQ, redrive, tópico, assinatura, políticas (idempotente)
-│   │   └── policies/                       # políticas de recurso aplicadas pelo init.sh (messaging §2.1)
-│   │       ├── wager-transactions.json
-│   │       ├── wager-transactions-dlq.json
-│   │       ├── wallet-events-topic.json
-│   │       └── wallet-events-audit.json
+│   │   └── policies/                       # políticas de identidade por usuário IAM + política da fila de auditoria (messaging §2.1); reutilizadas pelo I04f
+│   │       ├── pda-wallet-service.json     # identidade: consumir, DLQ, publicar no tópico
+│   │       ├── provider.json               # identidade: SendMessage na fila de entrada (provider-a, provider-b)
+│   │       └── wallet-events-audit.json    # recurso: entrega do tópico (aws:SourceArn)
 │   ├── keycloak/
 │   │   ├── realm-pda.json                  # clients, roles, mappers provider_id e audience (D-07)
 │   │   └── realm-other.json                # realm de teste para iss/chaves inválidos
@@ -184,6 +186,12 @@ pda/
 ├── test/
 │   ├── testkit/                            # utilitários compartilhados (sem build tag)
 │   │   ├── env.go                          # banco e filas isolados por pacote (test-plan §3.2)
+│   │   ├── root.go                         # RepoRoot: raiz do módulo (go.mod)
+│   │   ├── dotenv.go                       # lê .env.example (+ .env) para os testes
+│   │   ├── awscreds.go                     # lê .local/aws/credentials (profiles IAM do aws-init)
+│   │   ├── aws.go                          # MiniStack com chave raiz ou chaves IAM; filas isoladas
+│   │   ├── postgres.go                     # AppDatabaseURL (M0); o NewEnv com banco isolado vem no M2
+│   │   ├── net.go                          # FreeAddr: porta livre no loopback
 │   │   ├── auth.go                         # tokens reais e forjados
 │   │   ├── api.go                          # cliente HTTP tipado
 │   │   ├── contract.go                     # validação de req/resp contra api/openapi.yaml (kin-openapi)
@@ -259,7 +267,7 @@ flowchart TD
 | `adapters/*` | `app`, `domain/*`, `apperrors`, `auth`, `config`, `observability`, `faultinject`, bibliotecas de infraestrutura | Outros adaptadores (exceção: `sqsconsumer` e `outbox` usam `awsclient`) | Revisão + `depguard` |
 | `bootstrap` | Tudo em `internal/` + `fx` | — | — |
 | `api` (raiz) | stdlib (`embed`) | Qualquer pacote interno | Revisão. É importado só por `httpapi` e `test/testkit` |
-| `cmd/pda` | `bootstrap` | Qualquer outro pacote interno | Revisão |
+| `cmd/pda` | `bootstrap` e `config` (constante `DefaultHTTPAddr` da sonda `pda healthcheck`) | Qualquer outro pacote interno | Revisão |
 | `test/*` | Tudo | — | — |
 
 **Princípios:**

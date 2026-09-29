@@ -30,15 +30,15 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 
 ### Dia 1 — 29/09 (ter): fundação, domínio, banco e HTTP síncrono
 
-#### M0 — Esqueleto, qualidade e spike de infraestrutura (~2,5 h)
+#### M0 — Esqueleto, qualidade e spike de infraestrutura (~2,5 h) — ✅ concluído em 29/09
 
 - `go mod init github.com/KaioVinicios/pda` com `go 1.27.1`, `Dockerfile` multi-stage (`golang:1.27.1-alpine` → `distroless/static-debian12:nonroot`), `.dockerignore` e `.env.example`.
 - **Qualidade desde o primeiro commit:** `.golangci.yml`, `.editorconfig` e os alvos do `Makefile` definidos em [`stack.md`](stack.md) §5. `make check` precisa passar já no esqueleto.
-- Verificar os dois itens de [`stack.md`](stack.md) §4.2: o golangci-lint v2.14.0 funciona com Go 1.27.1, e o `forbidigo` captura `float64` usado como tipo.
-- `docker-compose.yml` com `postgres` (init de roles), `keycloak` (import de `realm-pda.json` e `realm-other.json`), `ministack`, `aws-init`, `migrate` e `app-1..3`, todos com healthchecks. `docker compose up --build --wait` sobe tudo.
-- Fx com os módulos `config`, `observability` e `postgres` (apenas pool + ping) e `/health/live` e `/health/ready`.
-- **Spike do MiniStack**, com um script descartável que testa: SNS FIFO, assinatura SNS→SQS FIFO com `RawMessageDelivery`, `RedrivePolicy`, `ChangeMessageVisibility`, o atributo `ApproximateReceiveCount`, `MessageGroupId` no receive e se alguma configuração (ou a imagem `-full`) **avalia** políticas IAM (D-02).
-- **Spike do Keycloak**: token via `curl` com `client_credentials`; conferir `iss`, `aud` e a claim `provider_id` no JWT.
+- `docker-compose.yml` com `postgres` (init de roles), `keycloak` (import de `realm-pda.json` e `realm-other.json`), `ministack` (`AUTH=true`), `aws-init` (recursos, usuários IAM e `.local/aws/credentials`), `migrate` e `app-1..3`, todos com healthchecks. `docker compose up --build --wait` sobe tudo.
+- Fx com os módulos `config`, `observability`, `postgres` (apenas pool + ping), `aws` (clientes SQS/SNS, verificação das filas no start) e `httpapi` (apenas `/health/live` e `/health/ready`, com PostgreSQL + SQS). Sonda `pda healthcheck` para o healthcheck das réplicas distroless.
+- ✅ **Spike do MiniStack** (28/09, [`dev/spike-ministack.md`](dev/spike-ministack.md)): toda a topologia funciona sem plano B, e as políticas IAM são avaliadas com `AUTH=true`. Consequência: o `aws-init` também cria os usuários IAM e o arquivo de credenciais (D-02).
+- ✅ **Spike do Keycloak** (28/09, [`dev/spike-keycloak.md`](dev/spike-keycloak.md)): `iss` estável com `KC_HOSTNAME` + backchannel dinâmico; o `realm-pda.json` precisa declarar o scope `roles` sem o mapper `audience resolve` (D-07).
+- ✅ **Spike do lint** (28/09, [`dev/spike-lint.md`](dev/spike-lint.md)): os dois itens de [`stack.md`](stack.md) §4.2 foram confirmados.
 
 **Pronto quando:**
 - `docker compose up --build` deixa as 3 réplicas prontas;
@@ -46,7 +46,7 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 - um `curl` obtém um token válido;
 - o resultado dos spikes está anotado em `docs/dev/spike-ministack.md` e `docs/dev/spike-keycloak.md`, e as decisões resultantes (plano B, se necessário) estão refletidas em `decisions.md` (§5).
 
-**Cobre:** ART-01..07, ART-10, HTTP-08 (parcial), FX-02.
+**Cobre:** ART-01..04, ART-06, ART-07, ART-10, HTTP-08, FX-01 (parcial), FX-02, AUTH-09 (parcial). Spec: [`dev/specs/2026-09-28-m0-skeleton-design.md`](dev/specs/2026-09-28-m0-skeleton-design.md).
 
 #### M1 — Domínio com TDD (~3 h)
 
@@ -101,9 +101,9 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
   - pollers, lotes agrupados por `MessageGroupId`, inbox na mesma UoW e `DeleteMessage` após o commit;
   - envio explícito para a DLQ, backoff com `ChangeMessageVisibility` e pausa por saúde;
   - shutdown em 5 passos ([`messaging.md`](messaging.md) §4).
-- Testes I04a–e.
+- Testes I04a–f.
 
-**Cobre:** SQS-*, AUTH-09 (políticas no `init.sh`). **Eliminatório: E5 (SQS).**
+**Cobre:** SQS-*, AUTH-09 (políticas avaliadas pelo MiniStack com `AUTH=true`, provadas pelo I04f). **Eliminatório: E5 (SQS).**
 
 #### M6 — Worker de referências (~1,5 h)
 
@@ -179,9 +179,10 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 
 | Risco | Sinal | Mitigação |
 | --- | --- | --- |
-| O MiniStack não suporta SNS FIFO ou a assinatura FIFO | Falha no spike de M0 | Plano B (D-02): a outbox publica direto em `wallet-events.fifo` (SQS). O contrato do evento não muda |
-| Redrive ou `ChangeMessageVisibility` com comportamento diferente no MiniStack | Falha no spike ou no I04d | Encaminhamento explícito para a DLQ quando `ApproximateReceiveCount >= max`, feito pelo próprio consumidor |
-| `iss` divergente entre host e container | 401 com um token válido | `KC_HOSTNAME` fixo + `OIDC_ISSUER`/`OIDC_JWKS_URL` separados (D-07) |
+| ~~O MiniStack não suporta SNS FIFO ou a assinatura FIFO~~ | ✅ Descartado no spike do M0 | — |
+| ~~Redrive ou `ChangeMessageVisibility` com comportamento diferente no MiniStack~~ | ✅ Descartado no spike do M0 (o I04d continua sendo a prova) | — |
+| `iss` divergente entre host e container | 401 com um token válido | ✅ Validado no spike: `KC_HOSTNAME` + `KC_HOSTNAME_BACKCHANNEL_DYNAMIC` + `OIDC_ISSUER`/`OIDC_JWKS_URL` separados, sem discovery (D-07) |
+| Chaves IAM aleatórias no emulador | App sem credenciais válidas depois de recriar o MiniStack | O `aws-init` reescreve `.local/aws/credentials` a cada execução, e as réplicas dependem dele (`service_completed_successfully`) |
 | Keycloak lento para subir (30–60 s) | Timeout no `compose up` | Healthcheck em `/health/ready` do Keycloak, `--wait` e `start_period` generoso |
 | Testes de concorrência instáveis | Falhas intermitentes | Barreira de largada, `Eventually` com prazo e repetição N× com carteiras novas (test-plan §1) |
 | Deadlock entre o worker de referências e o HTTP | `40P01` nos testes | Ordem fixa de lock: carteira → transação ([`data-model.md`](data-model.md) §6) |

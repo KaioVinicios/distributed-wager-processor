@@ -42,16 +42,16 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 1. Artefatos obrigatórios no repositório (§4, §15)
 
-- [ ] **ART-01** Código-fonte Go formatado com `gofmt`.
-- [ ] **ART-02** `go.mod` e `go.sum` versionados, com a versão do Go declarada em `go.mod`.
-- [ ] **ART-03** `Dockerfile` declarando a mesma versão do Go.
-- [ ] **ART-04** `docker-compose.yml` subindo aplicação, PostgreSQL, Keycloak (ou outro IdP) e LocalStack/MiniStack.
+- [x] **ART-01** Código-fonte Go formatado com `gofmt`. *(M0, 29/09: `make check` (`fmt-check`: `gofmt -l` vazio + gofumpt/goimports).)*
+- [x] **ART-02** `go.mod` e `go.sum` versionados, com a versão do Go declarada em `go.mod`. *(M0, 29/09: `go.mod` com `go 1.27.1` e `go.sum`; `make tidy-check`.)*
+- [x] **ART-03** `Dockerfile` declarando a mesma versão do Go. *(M0, 29/09: `make go-version-check` (go.mod = Dockerfile = 1.27.1).)*
+- [x] **ART-04** `docker-compose.yml` subindo aplicação, PostgreSQL, Keycloak (ou outro IdP) e LocalStack/MiniStack. *(M0, 29/09: `docker compose up --build --wait`: postgres, keycloak, ministack, aws-init e app-1..3 saudáveis.)*
 - [ ] **ART-05** Migrations versionadas, com `up` e `down`.
-- [ ] **ART-06** Provisionamento automático das filas `wager-transactions.fifo` e `wager-transactions-dlq.fifo` com redrive, além do destino dos eventos de saída.
-- [ ] **ART-07** Provisionamento automático do IdP (realm, clients, roles/scopes e identidades de teste).
+- [x] **ART-06** Provisionamento automático das filas `wager-transactions.fifo` e `wager-transactions-dlq.fifo` com redrive, além do destino dos eventos de saída. *(M0, 29/09: `deploy/aws/init.sh`; `TestProvisioning` (redrive `maxReceiveCount=10`, tópico FIFO, assinatura raw).)*
+- [x] **ART-07** Provisionamento automático do IdP (realm, clients, roles/scopes e identidades de teste). *(M0, 29/09: `deploy/keycloak/realm-*.json` importados; tokens reais conferidos com `scripts/get-token.sh`.)*
 - [ ] **ART-08** `README.md` completo (ver DOC-01).
 - [~] **ART-09** `ARCHITECTURE.md` completo (ver DOC-02).
-- [ ] **ART-10** `.env.example` com valores locais e nenhum segredo real.
+- [x] **ART-10** `.env.example` com valores locais e nenhum segredo real. *(M0, 29/09: `.env.example` só com valores locais; chaves AWS fora dele (geradas pelo `aws-init`).)*
 - [ ] **ART-11** Os comandos abaixo, ou equivalentes documentados, funcionam a partir de um checkout limpo:
   ```sh
   docker compose up --build
@@ -74,7 +74,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [ ] **AUTH-06** ⛔ Operações de carteira (abertura, leitura, ledger, reconciliação) ficam restritas ao serviço interno.
 - [ ] **AUTH-07** ⛔ Um acesso não autorizado não produz efeito financeiro nem expõe dados. A autorização acontece antes de qualquer escrita ou consulta de idempotência.
 - [ ] **AUTH-08** `GET /health/live` e `GET /health/ready` são públicos.
-- [ ] **AUTH-09** O acesso à mensageria é controlado por credenciais e políticas do broker, e o consumidor continua aplicando as validações de domínio.
+- [~] **AUTH-09** O acesso à mensageria é controlado por credenciais e políticas do broker, e o consumidor continua aplicando as validações de domínio. *(M0, 29/09: M0: MiniStack `AUTH=true`, usuários IAM com políticas de identidade; `TestProvisioning` prova uma permissão e uma negação. Matriz completa no I04f (M5).)*
 - [ ] **AUTH-10** A escolha do IdP, a validação de credenciais e o modelo de permissões estão justificados no `ARCHITECTURE.md`.
 
 ---
@@ -204,7 +204,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [ ] **HTTP-05** `GET /providers/:providerId/wagering/transactions/:externalTransactionId`.
 - [ ] **HTTP-06** `POST /wagering/transactions`: segue o contrato do desafio (`transactionId`, `status`, `balance`, `idempotentReplay`).
 - [ ] **HTTP-07** `POST /wallets/:walletId/reconciliation`: reconstrói o saldo a partir do ledger (incluindo a abertura) em uma visão consistente (snapshot) e devolve `difference = stored − calculated`. Divergências aparecem na resposta, no log e em uma métrica. **Não altera o saldo.**
-- [ ] **HTTP-08** `GET /health/live` (processo) e `GET /health/ready` (PostgreSQL + SQS).
+- [x] **HTTP-08** `GET /health/live` (processo) e `GET /health/ready` (PostgreSQL + SQS). *(M0, 29/09: `health_test`, `health_handler_test` e I07b `TestFxLifecycle` (PostgreSQL + SQS).)*
 - [ ] **HTTP-09** Códigos HTTP e corpos de resposta documentados e **distinguíveis** para: entrada inválida, conflito, rejeição de negócio, processamento pendente e indisponibilidade transitória.
 
 ---
@@ -255,8 +255,8 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 15. Composição e ciclo de vida com Uber Fx (§4)
 
-- [ ] **FX-01** Configuração, conexões, repositórios, casos de uso, handlers e workers compostos com `fx.Module`, `fx.Provide` e `fx.Invoke`, com injeção por construtor.
-- [ ] **FX-02** A inicialização valida a configuração e as dependências (fail fast).
+- [~] **FX-01** Configuração, conexões, repositórios, casos de uso, handlers e workers compostos com `fx.Module`, `fx.Provide` e `fx.Invoke`, com injeção por construtor. *(M0, 29/09: M0: `config`, `observability`, `postgres`, `aws` e `httpapi` com `fx.Module`/`Provide`/`Invoke`; I07a `TestFxGraph`. Completa no M3–M6.)*
+- [x] **FX-02** A inicialização valida a configuração e as dependências (fail fast). *(M0, 29/09: I07c `TestFxFailFast` (banco inacessível, fila inexistente, config inválida); `config_test`; `ServeOnLifecycle` com porta ocupada.)*
 - [ ] **FX-03** Workers com cancelamento, prazos de execução e término observável.
 - [ ] **FX-04** O shutdown interrompe novas entradas e conclui ou libera o trabalho em andamento.
 - [ ] **FX-05** As dependências (pool do PostgreSQL, clientes) só são fechadas depois dos componentes que as usam.
@@ -268,7 +268,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [ ] **OBS-01** Logs em JSON com `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId`, quando disponíveis.
 - [ ] **OBS-02** Logs sem credenciais, dados sensíveis ou payloads financeiros completos.
 - [ ] **OBS-03** Métricas de: resultados por status, duplicatas, retries, DLQ, conflitos de concorrência, atraso da outbox, latência de processamento e divergências de reconciliação.
-- [ ] **OBS-04** Health checks (HTTP-08).
+- [x] **OBS-04** Health checks (HTTP-08). *(M0, 29/09: ver HTTP-08.)*
 - [ ] **OBS-05** ⭐ Tracing com OpenTelemetry e dashboards.
 
 ---

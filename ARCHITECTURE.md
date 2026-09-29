@@ -267,7 +267,8 @@ Detalhes: [`docs/messaging.md`](docs/messaging.md) e [`docs/decisions.md`](docs/
   - assinatura **RS256** (qualquer outro algoritmo, inclusive `none`, é recusado);
   - chaves obtidas por **JWKS**, com cache;
   - `iss`, `aud = pda-api` e `exp`/`nbf`, com tolerância de 30 s.
-- **Issuer e URL do JWKS configurados separadamente**, porque o `iss` público (`localhost`) difere do endereço interno do Keycloak na rede do compose.
+- **Issuer e URL do JWKS configurados separadamente**, porque o `iss` público (`localhost`) difere do endereço interno do Keycloak na rede do compose. O verificador busca as chaves direto do JWKS, sem discovery: de dentro da rede, o discovery devolveria um `issuer` diferente da URL consultada.
+- **A audience vem só de um mapper explícito por client.** O mapper padrão `audience resolve` do Keycloak, que poria `pda-api` em `aud` para qualquer client com roles nele, é removido do realm. Assim, a checagem de `aud` tem efeito real.
 - **Resposta 401 uniforme** (`WWW-Authenticate: Bearer error="invalid_token"`) para token ausente, inválido ou expirado, sem revelar qual foi o caso.
 
 ### 10.3 Modelo de permissões
@@ -293,7 +294,7 @@ Detalhes: [`docs/messaging.md`](docs/messaging.md) e [`docs/decisions.md`](docs/
 - **Sem efeito nem vazamento:**
   - A autorização roda **antes** de qualquer leitura ou escrita, e a busca de idempotência usa o provedor do token. Um provedor não consegue fazer replay da operação de outro.
   - O 403 por divergência de provedor não depende da existência do recurso, e o 404 por id opaco não revela se o recurso existe. Os dois caminhos evitam enumeração.
-- **Mensageria:** o acesso às filas e ao tópico é controlado por credenciais e **políticas de recurso** do broker. Os provedores podem só enviar; o serviço pode consumir, publicar e enviar para a DLQ. O consumidor aplica **todas** as validações de domínio sem confiar na origem (ver limitações).
+- **Mensageria:** o acesso às filas e ao tópico é controlado por credenciais e **políticas IAM avaliadas pelo broker**: MiniStack com `AUTH=true`, um usuário IAM por principal e políticas de identidade de menor privilégio. Os provedores podem só enviar; o serviço pode consumir, publicar e enviar para a DLQ. O teste I04f prova as negações. O consumidor aplica **todas** as validações de domínio sem confiar na origem (ver limitações).
 
 Detalhes: [`docs/decisions.md`](docs/decisions.md) D-07 e [`docs/messaging.md`](docs/messaging.md) §2.1.
 
@@ -309,7 +310,8 @@ Detalhes: [`docs/decisions.md`](docs/decisions.md) D-07 e [`docs/messaging.md`](
   - busca inicial do JWKS;
   - verificação das filas.
 
-  Qualquer falha impede o start com um erro claro.
+  Qualquer falha impede o start com um erro claro. Os servidores HTTP (API e admin) fazem o `Listen` de forma síncrona no `OnStart` (`observability.ServeOnLifecycle`): uma porta ocupada também impede o start, em vez de falhar silenciosamente numa goroutine.
+- **Health checks por composição:** cada adaptador contribui um *checker* por *value group* do Fx (`group:"health_checkers"`), e o `observability` só os agrega. Assim o pacote de observabilidade não depende de `pgx` nem do SDK AWS.
 - **Workers observáveis:** cada worker recebe um `context` cancelável e um `WaitGroup`, com prazos por item e logs de início e fim. O `OnStop` cancela e espera até o prazo.
 - **Papéis por ambiente:** `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED`. Os módulos desligados nem são incluídos no grafo.
 - **Verificação:** testes de `fx.ValidateApp`, de start/stop com tráfego real e de ausência de goroutines vazadas (`goleak`).
@@ -329,7 +331,7 @@ O Fx executa os `OnStart` na ordem de registro e os `OnStop` na ordem inversa. A
    - espera as que estão em andamento até o prazo;
    - se o prazo vencer, cancela as restantes, faz rollback e libera a visibilidade para reentrega segura.
 3. **Publisher e worker de referências:** param de reservar trabalho e terminam o item atual. Um lease reservado e não publicado vence e é reassumido por outra instância.
-4. **Dependências:** o pool do PostgreSQL e os clientes são fechados **depois** que todos os componentes que os usam terminaram.
+4. **Dependências:** o pool do PostgreSQL e os clientes AWS (conexões ociosas do cliente HTTP do SDK) são fechados **depois** que todos os componentes que os usam terminaram. O teste I07b verifica isso com `goleak`.
 
 **Encerramento abrupto (`SIGKILL`) é seguro por construção:** nada é removido do SQS sem commit, o lease da outbox expira e as pendências ficam agendadas no banco. Isso é demonstrado com pontos de falha injetados nos testes e2e.
 
@@ -373,7 +375,9 @@ Métricas auxiliares do consumidor (`sqs_messages_received_total`, `sqs_receive_
 ### 13.3 Health checks
 
 - `GET /health/live`: o processo está de pé.
-- `GET /health/ready`: PostgreSQL (ping) **e** SQS (`GetQueueAttributes`), com 2 s de timeout cada. Responde 503 enquanto uma dependência estiver indisponível.
+- `GET /health/ready`: PostgreSQL (ping) **e** SQS (`GetQueueAttributes`), executados em paralelo, com 2 s de timeout cada, mesmo que a dependência ignore o cancelamento. Responde 503 enquanto uma dependência estiver indisponível.
+- **Corpo:** `{"status":"UP|DOWN","checks":{"postgres":"UP","sqs":"DOWN"}}`. O motivo de uma falha vai só para o log, nunca para a resposta.
+- **Healthcheck do container:** a imagem distroless não tem shell nem `curl`, então o compose usa o próprio binário (`pda healthcheck`), que consulta o `/health/ready` local.
 
 **Reconciliação:** `POST /wallets/{id}/reconciliation` reconstrói o saldo a partir do ledger em uma transação `REPEATABLE READ READ ONLY` (visão consistente). Calcula `difference = stored − calculated`. As divergências aparecem na resposta, no log e na métrica, e **nada é alterado**.
 
@@ -427,7 +431,12 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 
 ## 16. Limitações conhecidas
 
-1. **Políticas do broker não são avaliadas localmente.** Nenhum emulador gratuito (MiniStack, LocalStack sem plano pago) aplica políticas IAM. Elas são provisionadas e documentadas como valeriam em produção, mas localmente não barram acessos. *Por que MiniStack:* a imagem atual do LocalStack exige conta e token, o que impediria reproduzir a solução a partir de um checkout limpo.
+1. **O broker local autoriza, mas autentica fracamente.**
+   - O MiniStack com `AUTH=true` avalia as políticas IAM, mas **não verifica a assinatura SigV4**: o principal é identificado só pelo access key id.
+   - Ele também só concede acesso por política de identidade, não por `Allow` em política de recurso.
+   - Em produção, as credenciais viriam de roles IAM (IRSA ou task role), sem chaves estáticas.
+   - As chaves IAM do emulador são aleatórias e vivem só na memória do MiniStack. Se ele for recriado, o `aws-init` gera chaves novas e as réplicas precisam ser reiniciadas (`docker compose restart app-1 app-2 app-3`), porque o SDK lê o arquivo de credenciais no start. Reexecutar o `aws-init` com o MiniStack no ar reaproveita as chaves.
+   - *Por que MiniStack:* a imagem atual do LocalStack exige conta e token, o que impediria reproduzir a solução a partir de um checkout limpo.
 2. **O `providerId` no SQS não está vinculado a um principal autenticado.** Uma única fila recebe todos os provedores. Em produção, cada provedor teria sua fila ou principal IAM, e o `providerId` seria derivado da origem.
 3. **A ordem dos eventos por carteira não é estrita** com vários publishers. Os consumidores ordenam pelo `walletVersion` e deduplicam pelo `eventId`.
 4. **O envio explícito para a DLQ seguido de remoção não é atômico.** Um crash entre os dois passos pode deixar uma cópia a mais na DLQ, que a deduplicação FIFO reduz.
@@ -445,7 +454,7 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 
 ## 17. Trabalho não concluído
 
-*Preenchido na entrega.* Estado em 28/09/2026: arquitetura e contratos definidos; implementação ainda não iniciada. Os diferenciais opcionais (tracing com OpenTelemetry, dashboards, teste de carga e ledger de partidas dobradas) só serão feitos se houver folga ([`docs/implementation-plan.md`](docs/implementation-plan.md) M12).
+*Preenchido na entrega.* Estado em 29/09/2026: **M0 concluído**, com esqueleto Fx, health, métricas, compose com 3 réplicas, Keycloak provisionado, MiniStack com IAM aplicado e tooling de qualidade. As regras de negócio começam no M1. Os diferenciais opcionais (tracing com OpenTelemetry, dashboards, teste de carga e ledger de partidas dobradas) só serão feitos se houver folga ([`docs/implementation-plan.md`](docs/implementation-plan.md) M12).
 
 ---
 
