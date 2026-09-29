@@ -87,7 +87,8 @@ pda/
 │   │   └── classify_test.go                # U09a
 │   │
 │   ├── app/                                # casos de uso + portas (SEM fx, net/http, aws, pgx)
-│   │   ├── ports.go                        # UnitOfWork, Repos, WalletRepo..., Clock, IDGenerator
+│   │   ├── ports.go                        # UnitOfWork, Repos, WalletRepo... (M2); Clock, IDGenerator (M3)
+│   │   ├── errors.go                       # ErrNotFound, ErrWalletAlreadyExists, ErrIdempotencyRace...
 │   │   ├── open_wallet.go
 │   │   ├── process_wager.go                # caso de uso único para HTTP, SQS e worker (lifecycle §6)
 │   │   ├── resolve_references.go           # passo do worker (claim → reavaliação)
@@ -107,7 +108,9 @@ pda/
 │   ├── adapters/
 │   │   ├── postgres/
 │   │   │   ├── pool.go                     # pgxpool + OnStart (ping) / OnStop (Close)
-│   │   │   ├── uow.go                      # UnitOfWork: Begin, lock_timeout, Commit/Rollback
+│   │   │   ├── querier.go                  # interface interna: pgx.Tx e *pgxpool.Pool
+│   │   │   ├── repos.go                    # app.Repos sobre um querier (tx no UoW, pool nas leituras)
+│   │   │   ├── uow.go                      # UnitOfWork: Do (lock_timeout) e Snapshot (REPEATABLE READ READ ONLY)
 │   │   │   ├── wallet_repo.go
 │   │   │   ├── transaction_repo.go
 │   │   │   ├── ledger_repo.go
@@ -116,7 +119,7 @@ pda/
 │   │   │   ├── money_mapping.go            # Money ↔ (BIGINT, CHAR(3))
 │   │   │   ├── errors.go                   # SQLSTATE / constraint → apperrors.Kind (U09b)
 │   │   │   ├── module.go
-│   │   │   └── *_integration_test.go       # I01–I03, I16 (//go:build integration)
+│   │   │   └── *_integration_test.go       # I01–I03, I16–I19 (//go:build integration)
 │   │   ├── httpapi/
 │   │   │   ├── server.go                   # http.Server + lifecycle (Shutdown)
 │   │   │   ├── routes.go                   # ServeMux com padrões "METHOD /path/{id}"
@@ -194,12 +197,12 @@ pda/
 │
 ├── test/
 │   ├── testkit/                            # utilitários compartilhados (sem build tag)
-│   │   ├── env.go                          # banco e filas isolados por pacote (test-plan §3.2)
+│   │   ├── env.go                          # NewEnv: banco (M2) e filas (M4/M5) isolados por pacote (test-plan §3.2)
 │   │   ├── root.go                         # RepoRoot: raiz do módulo (go.mod)
 │   │   ├── dotenv.go                       # lê .env.example (+ .env) para os testes
 │   │   ├── awscreds.go                     # lê .local/aws/credentials (profiles IAM do aws-init)
 │   │   ├── aws.go                          # MiniStack com chave raiz ou chaves IAM; filas isoladas
-│   │   ├── postgres.go                     # AppDatabaseURL (M0); o NewEnv com banco isolado vem no M2
+│   │   ├── postgres.go                     # NewDatabase (banco isolado + migrations), AssertLedgerConsistent (parte SQL)
 │   │   ├── net.go                          # FreeAddr: porta livre no loopback
 │   │   ├── auth.go                         # tokens reais e forjados
 │   │   ├── api.go                          # cliente HTTP tipado

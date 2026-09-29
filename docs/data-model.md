@@ -210,7 +210,7 @@ CREATE TABLE wager_transactions (
 
 **Pontos importantes:**
 - **`PENDING` não é um status persistível** (D-05). O `CHECK` de `status` o exclui, então "todo `PENDING` confirmado tem retomada" (TX-09) vale por construção. O único estado de espera persistido é `PENDING_REFERENCE`, e ele sempre tem agenda de retentativa.
-- `result_balance_minor` é o saldo observado no processamento, devolvido nos replays (IDEM-08). Em `REJECTED`, é o saldo lido no momento da rejeição. Na rejeição por expiração, é o saldo no momento em que o worker rejeitou.
+- `result_balance_minor` é o saldo observado no processamento, devolvido nos replays (IDEM-08). Em `REJECTED`, é o saldo lido no momento da rejeição. Na rejeição por expiração, é o saldo no momento em que o worker rejeitou. Como é um saldo da carteira, está **na moeda da carteira**, que difere da `currency` da transação numa rejeição `CURRENCY_MISMATCH`; por isso as leituras de transação fazem `JOIN wallets` para reconstruí-lo.
 - A `currency` da transação é gravada como recebida. Uma divergência com a carteira vira `REJECTED` com `CURRENCY_MISMATCH` e fica auditável.
 - `received_via` é apenas auditoria e fica **fora** do hash (IDEM-03).
 
@@ -335,9 +335,10 @@ CREATE INDEX outbox_due_idx ON outbox_events (next_attempt_at) WHERE published_a
 CREATE INDEX outbox_aggregate_idx ON outbox_events (aggregate_id, occurred_at);
 ```
 
-- `payload` guarda o **envelope completo** já serializado (OUT-09, OUT-12). O publisher envia exatamente esses bytes, sem remontar nada, e por isso a republicação preserva `eventId` e o conteúdo (OUT-05).
+- `payload` guarda o **envelope completo** já serializado (OUT-09, OUT-12). O publisher envia o JSON lido da coluna, sem remontar nada, e por isso a republicação preserva `eventId` e o conteúdo (OUT-05). Por ser `JSONB`, o PostgreSQL normaliza o texto na gravação (ordem das chaves e espaços): o conteúdo é o do envelope e é idêntico em toda republicação, mas os bytes não são os do `MarshalJSON`.
 - `aggregate_id` recebe o `walletId` nos eventos de saldo e o `transactionId` nos demais. `message_group_id` guarda sempre o `walletId`, usado como `MessageGroupId` no SNS ([`messaging.md`](messaging.md) §5.2).
 - `last_error` é truncado em 1 KB e nunca contém o payload.
+- No `INSERT`, `next_attempt_at = now()` do banco: o claim (§6) compara com o mesmo relógio.
 
 ---
 
@@ -473,10 +474,15 @@ BEGIN
     RETURN NEW;
 END $$;
 
+CREATE FUNCTION wallet_guard_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'wallet % cannot be deleted', OLD.id USING ERRCODE = 'PDA03';
+END $$;
+
 CREATE TRIGGER wallet_guard BEFORE UPDATE ON wallets
     FOR EACH ROW EXECUTE FUNCTION wallet_guard_update();
 CREATE TRIGGER wallet_no_delete BEFORE DELETE ON wallets
-    FOR EACH ROW EXECUTE FUNCTION wallet_guard_delete();   -- RAISE com PDA03
+    FOR EACH ROW EXECUTE FUNCTION wallet_guard_delete();
 ```
 
 - Uma carteira é criada com `version = 1`, garantido pelo `INSERT` e pelo teste. `LOSS` não toca a carteira.
@@ -505,15 +511,44 @@ BEGIN
     RETURN NEW;
 END $$;
 
+CREATE FUNCTION wager_tx_guard_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'wager transaction % cannot be deleted', OLD.id USING ERRCODE = 'PDA02';
+END $$;
+
 CREATE TRIGGER wager_tx_guard BEFORE UPDATE ON wager_transactions
     FOR EACH ROW EXECUTE FUNCTION wager_tx_guard_update();
 CREATE TRIGGER wager_tx_no_delete BEFORE DELETE ON wager_transactions
-    FOR EACH ROW EXECUTE FUNCTION wager_tx_guard_delete();   -- RAISE com PDA02
+    FOR EACH ROW EXECUTE FUNCTION wager_tx_guard_delete();
 ```
+
+`TRUNCATE` em `wallets` e `wager_transactions` não tem trigger próprio: o `pda_app` não tem o privilégio, o `TRUNCATE` simples falha pela FK do ledger e, com `CASCADE`, alcança o ledger e dispara o `PDA01`.
 
 ### 4.5 Outbox: snapshot imutável (OUT-01) — `PDA05`
 
 O trigger `BEFORE UPDATE` bloqueia alterações em `event_id`, `aggregate_type`, `aggregate_id`, `message_group_id`, `event_type`, `event_version`, `payload`, `correlation_id`, `causation_id` e `occurred_at`. Também bloqueia `published_at` voltar de preenchido para `NULL`.
+
+```sql
+CREATE FUNCTION outbox_guard_update() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF (NEW.event_id, NEW.aggregate_type, NEW.aggregate_id, NEW.message_group_id, NEW.event_type,
+        NEW.event_version, NEW.payload, NEW.correlation_id, NEW.causation_id, NEW.occurred_at)
+       IS DISTINCT FROM
+       (OLD.event_id, OLD.aggregate_type, OLD.aggregate_id, OLD.message_group_id, OLD.event_type,
+        OLD.event_version, OLD.payload, OLD.correlation_id, OLD.causation_id, OLD.occurred_at) THEN
+        RAISE EXCEPTION 'outbox event % snapshot is immutable', OLD.event_id USING ERRCODE = 'PDA05';
+    END IF;
+    IF OLD.published_at IS NOT NULL AND NEW.published_at IS NULL THEN
+        RAISE EXCEPTION 'outbox event % cannot be unpublished', OLD.event_id USING ERRCODE = 'PDA05';
+    END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER outbox_guard BEFORE UPDATE ON outbox_events
+    FOR EACH ROW EXECUTE FUNCTION outbox_guard_update();
+```
+
+A `inbox_messages` é append-only só por permissão (§5): o `pda_app` não tem `UPDATE` nem `DELETE`.
 
 ---
 
@@ -542,9 +577,9 @@ As roles são criadas por um script de init do container PostgreSQL (`docker-ent
 
 As consultas que concentram as garantias ficam documentadas aqui porque são a evidência verificável de §4 ("transações, locks e constraints explícitos").
 
-**Lock da carteira (D-09):**
+**Lock da carteira (D-09):** o `lock_timeout` é definido no início de toda transação do UoW, com o valor de `DB_LOCK_TIMEOUT`. Como `SET LOCAL` não aceita parâmetro, o Go usa o equivalente `SELECT set_config('lock_timeout', $1, true)`.
 ```sql
-SET LOCAL lock_timeout = '5s';
+SET LOCAL lock_timeout = '5s';  -- no Go: SELECT set_config('lock_timeout', '5000ms', true)
 SELECT id, player_id, currency, balance_minor, version, created_at, updated_at
 FROM wallets WHERE id = $1 FOR UPDATE;
 ```
@@ -589,10 +624,11 @@ Se o lease expirou e outra instância já confirmou, a atualização afeta 0 lin
 
 **Antecipação das pendências** (na transação que leva uma operação a estado terminal: `PROCESSED`, `REJECTED` ou `FAILED`):
 ```sql
-UPDATE wager_transactions SET next_attempt_at = now(), updated_at = now()
+UPDATE wager_transactions SET next_attempt_at = $3, updated_at = GREATEST($3, created_at)
 WHERE status = 'PENDING_REFERENCE'
   AND provider_id = $1 AND reference_external_transaction_id = $2;
 ```
+`$3` é o instante do Go (porta `Clock`). O `GREATEST` mantém `updated_at >= created_at` mesmo com o relógio de outra instância atrasado, a mesma regra do domínio.
 
 **Reconciliação (D-16)**, dentro de `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY`:
 ```sql

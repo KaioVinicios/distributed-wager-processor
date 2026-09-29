@@ -254,7 +254,9 @@ Um segundo realm, `other`, com um client de teste, fornece tokens com `iss` e ch
 
 ## D-09 — Concorrência: lock pessimista por carteira 🗳️ [CONC-*, WAL-08]
 
-- Em toda operação financeira, a transação SQL (`READ COMMITTED`) executa `SET LOCAL lock_timeout = '5s'` e em seguida `SELECT … FROM wallets WHERE id = $1 FOR UPDATE`.
+- Em toda operação financeira, a transação SQL (`READ COMMITTED`) define o `lock_timeout` local e em seguida executa `SELECT … FROM wallets WHERE id = $1 FOR UPDATE`.
+  - O valor vem de `DB_LOCK_TIMEOUT` (padrão 5 s). Como `SET LOCAL` não aceita parâmetro, o UoW usa `SELECT set_config('lock_timeout', $1, true)`, que tem o mesmo efeito.
+  - É aplicado no início de toda transação do `uow.Do`, e não só antes do lock da carteira. Assim também protege inbox, outbox e a antecipação de pendências.
 - O saldo e a versão são recalculados pelo agregado e gravados com `UPDATE … SET balance_minor = $new, version = version + 1 WHERE id = $1 AND version = $old`. O lock já garante a exclusão; a condição na versão é uma segunda proteção.
 - **Proteção no banco:** `CHECK (balance_minor >= 0)`. Mesmo com um bug no domínio, o saldo nunca fica negativo.
 - **Sem deadlock:** cada operação trava uma única carteira.
@@ -355,6 +357,11 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
 - A transação não é escondida no `context`: quem tem `Repos` está dentro da transação, e isso fica visível na assinatura.
 - As interfaces ficam na camada de aplicação e o domínio não conhece o UoW.
 - **Repositórios no Fx:** o módulo `postgres` fornece os repositórios e o `UnitOfWork` via `fx.Provide`. Fora de uma transação, os repositórios usam o pool (leituras). Dentro de `uow.Do`, o UoW instancia os mesmos repositórios sobre a `pgx.Tx`.
+- **Snapshot de leitura:** `uow.Snapshot(ctx, fn)` roda em `REPEATABLE READ READ ONLY`, para a reconciliação (D-16).
+- **Tipos do domínio nas portas:** os repositórios recebem e devolvem `wallet.Wallet`, `*wagering.WagerTransaction` e `wallet.LedgerEntry`, reidratados pelo adapter. Uma linha que o domínio recusa é erro permanente.
+- **Corridas como sentinelas:** o adapter traduz as violações de unicidade que o `app` trata para sentinelas do `app` (`ErrWalletAlreadyExists` como conflito; `ErrIdempotencyRace`, `ErrReversalRace` e `ErrInboxDuplicate` como transitórias). O `app` usa `errors.Is` e nunca vê nome de constraint nem SQLSTATE. Uma corrida não interceptada é resolvida pelo retry, que cai na releitura.
+- **Erros do banco sanitizados:** o erro traduzido leva só o SQLSTATE, o nome da constraint, a sentinela e o `Kind`. O `*pgconn.PgError` não sai do adapter, porque o `Detail` traz a linha inteira e acabaria no log (OBS-02). Um valor de domínio recusado pelo adapter (zero value, snapshot corrompido) é sempre permanente. Um ID que não é UUID canônico em `Get`/`Lock` resulta em "não encontrado", sem ir ao banco.
+- **Unidade de trabalho interrompida pelo `context`:** se o `ctx` terminou, nada foi confirmado (ou o resultado do commit é desconhecido). O erro leva o do `ctx` na cadeia e é transitório, e o caminho de idempotência torna o retry seguro (DOM-06).
 
 ---
 

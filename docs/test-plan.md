@@ -69,7 +69,7 @@ Sobe com `make infra-up`. Os testes usam apenas a infraestrutura do compose e **
 ### 3.2 Isolamento por pacote (`testkit.NewEnv`)
 
 Chamado no `TestMain` de cada pacote com tag:
-1. Cria o banco `pda_t_<pacote>_<rand>` como `pda_owner` (que tem `CREATEDB`) e aplica as migrations embutidas com `golang-migrate` + `iofs`. Isso também exercita as migrations (TST-I01).
+1. Cria o banco `pda_t_<pacote>_<rand>` como `pda_owner` (que tem `CREATEDB`) e aplica as migrations embutidas com `golang-migrate` + `iofs`. Isso também exercita as migrations (TST-I01). Como o `TestMain` não tem `testing.TB`, a assinatura é `testkit.NewEnv(ctx, pkg) (*Env, func(), error)`, e a função devolvida faz a limpeza.
 2. Cria `wager-<rand>.fifo`, `wager-dlq-<rand>.fifo` (redrive com `maxReceiveCount = 3`), o tópico `events-<rand>.fifo` e a fila de auditoria assinante.
 3. Devolve uma `config.Config` apontando para esses recursos, com os tempos acelerados de §3.3.
 4. No fim, derruba o banco e apaga filas e tópico. Com `PDA_TEST_KEEP=1`, mantém tudo para inspeção.
@@ -153,7 +153,7 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | U07 | `TestLedgerEntryInvariant`: o construtor rejeita `after ≠ before ± amount` | LED-02 |
 | U08 | `TestEventConstructors`: tipo e versão fixos, envelope completo, RFC 3339 UTC, dinheiro em string | OUT-08, OUT-09, OUT-12 |
 | U09a | `TestClassify`: `apperrors.Classify` reconhece cada `Kind` através de cadeias de `%w` | TX-10, DOM-04 |
-| U09b | `TestPostgresErrorMapping` (pacote `postgres`, sem banco): SQLSTATEs `08*`, `40001`, `40P01`, `55P03`, `57P01`, `53300` → transitório; `23505` por constraint → conflito de idempotência ou permanente; `PDA01`–`PDA05` e `22003` → permanente | TX-10 |
+| U09b | `TestPostgresErrorMapping` (pacote `postgres`, sem banco): SQLSTATEs `08*`, `40001`, `40P01`, `55P03`, `57P01`, `57014`, `53300` → transitório; `23505` por constraint → sentinela do `app` (`WALLET_ALREADY_EXISTS` como conflito; corridas de idempotência, reversão e inbox como transitórias) ou permanente; `PDA01`–`PDA05`, `22003`, `23502`, `23503`, `23514` e `25006` → permanente. O erro traduzido não carrega o `*pgconn.PgError` (o `Detail` traz a linha inteira) | TX-10 |
 | U10 | `TestDomainHasNoInfraImports`: `go list -deps ./internal/domain/...` não contém `fx`, `net/http`, `aws` nem `pgx` | DOM-07 |
 | U11 | `TestZeroValuesRejected`: `Money{}`, `Currency("")`, `Kind("")`, `Status("")`, `Wallet{}`, `WagerTransaction{}` e `LedgerEntry{}` são rejeitados pelas operações públicas. Um teste por pacote (`money`, `wallet`, `wagering`) | DOM-03 |
 | U12 | `TestReferenceRetryPolicy`: sequência de atrasos (1, 2, 4, … s, com teto de 60 s), jitter dentro de ±20% e expiração por tentativas e por TTL, inclusive quando o TTL já venceu na primeira tentativa | OPS-12, OPS-13 |
@@ -163,10 +163,11 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | ID | Teste | Cobre |
 | --- | --- | --- |
 | I01 | `TestMigrationsUpDownUp`: `up` → snapshot do schema (`information_schema` + `pg_indexes` + `pg_trigger`) → `down -all` → `up` → o snapshot é idêntico | TST-I01, DB-04 |
-| I02a | `TestConstraints`: tabela de SQL que violam cada constraint e índice de [`data-model.md`](data-model.md) §8, verificando o SQLSTATE e o nome da constraint | TST-I02, DB-03 |
-| I02b | `TestLedgerImmutable`: `UPDATE`, `DELETE` e `TRUNCATE` no ledger falham como `pda_app` (`42501`) **e** como `pda_owner` (`PDA01`) | TST-I02, LED-04, E9 |
+| I02a | `TestConstraints`: tabela de SQL que violam cada constraint e índice de [`data-model.md`](data-model.md) §8, verificando o SQLSTATE e o nome da constraint. Roda num banco próprio com os triggers desligados, porque eles disparam antes dos `CHECK` e os esconderiam (os triggers são do I02b–e) | TST-I02, DB-03 |
+| I02b | `TestLedgerImmutable` e `TestLedgerImmutableForApp`: `UPDATE`, `DELETE` e `TRUNCATE` no ledger falham como `pda_app` (`42501`) **e** como `pda_owner` (`PDA01`). `TestAppRolePrivileges`: os privilégios do `pda_app` são exatamente os do [`data-model.md`](data-model.md) §5 | TST-I02, LED-04, DB-03, E9 |
 | I02c | `TestLedgerCoupling`: saldo alterado sem lançamento, e transação `PROCESSED` com movimento sem lançamento, falham no commit (`PDA04`). Lançamento incoerente com a carteira, lançamento para `LOSS` ou para transação não `PROCESSED`, e direção errada falham no insert (`PDA04`) | WAL-06, LED-05 |
-| I02d | `TestTerminalTransactionImmutable`: `UPDATE` em `PROCESSED` falha (`PDA02`) | TX-07 |
+| I02d | `TestTerminalTransactionImmutable`: `UPDATE` em `PROCESSED`, `REJECTED` e `FAILED` falha (`PDA02`) | TX-07 |
+| I02e | `TestGuardTriggers`: colunas imutáveis e versão da carteira (`PDA03`), colunas imutáveis da transação (`PDA02`), `DELETE` em carteira e transação, snapshot da outbox e `published_at` voltando a `NULL` (`PDA05`) | WAL-07, TX-07, OUT-01 |
 | I03a | `TestFinancialAtomicity`: uma falha **transitória** forçada no último `INSERT` da outbox (dublê de repositório) desfaz tudo: sem transação, sem ledger, sem outbox, saldo e versão intactos | TST-I03, WAL-06, OUT-02 |
 | I03b | `TestPermanentFailureRecorded`: uma falha **permanente** forçada grava `FAILED` em transação separada, sem lançamento nem alteração de saldo. O replay devolve 500 com o mesmo resultado. Pelo SQS, a inbox registra `FAILED` e a mensagem chega à DLQ com `INTERNAL_PERMANENT_FAILURE` | TX-06, SQS-07 |
 | I04a | `TestInboxDeduplication`: a mesma mensagem enviada 2× com `MessageDeduplicationId` diferentes gera 1 transação, 1 lançamento, 1 linha na inbox e `wager_duplicates_total{layer="inbox"} = 1` | TST-I04, SQS-03, TST-C11 |
@@ -192,7 +193,10 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | I13 | `TestHealthChecks`: `/health/live` 200; `/health/ready` 200 com dependências e 503 com o PostgreSQL pausado | HTTP-08, OBS-04 |
 | I14 | `TestLogsHaveIdsWithoutSecrets`: logs capturados de um fluxo completo são JSON com os IDs e não contêm `Authorization`, o token nem o payload completo | OBS-01, OBS-02 |
 | I15 | `TestOpenAPIContract`: `api/openapi.yaml` passa na validação do kin-openapi, e o conjunto método + path do documento é **idêntico** ao das rotas registradas no `ServeMux`. Além disso, todo teste HTTP de integração valida requisição e resposta contra o documento (`testkit/contract.go`) | HTTP-*, DOC-06 |
-| I16 | `TestContextCancellation`: um `context` cancelado ou com prazo vencido interrompe a operação no banco (o UoW faz rollback e devolve o erro do `context`), sem efeito parcial | DOM-06 |
+| I16 | `TestContextCancellation`: um `context` cancelado, ou com prazo vencido enquanto espera o lock de uma carteira, interrompe a operação no banco (o UoW faz rollback e devolve o erro do `context`, classificado como transitório), sem efeito parcial | DOM-06 |
+| I17 | `TestDomainFlowsPersist`: abertura, BET, WIN (com e sem referência), LOSS, REFUND, ROLLBACK de WIN, rejeição e `PENDING_REFERENCE` → `PROCESSED`, produzidos por `OpenWallet`/`Settle` e gravados pelos repositórios, passam pelos triggers e pela verificação SQL de §6 | WAL-06, LED-05, TX-09 |
+| I18 | `TestWalletRepository`, `TestOutboxRepository`, `TestInboxRepository`, `TestTransactionRepository`, `TestTransactionQueries` e `TestLedgerQueries`: ida e volta idêntica de carteira, transação, lançamento e inbox; não encontrado; `FindReference` com `AlreadyReversed`; antecipação de pendências; paginação e soma do ledger; payload da outbox igual ao envelope serializado; sentinelas das violações de unicidade | DB-01, DB-02, WAL-03, IDEM-02, SQS-03 |
+| I19 | `TestUnitOfWork`: commit, rollback em erro e em `panic`, `lock_timeout` com a carteira travada por outra transação → transitório, `Snapshot` somente leitura | DB-02, CONC-01 (D-09) |
 
 ### 5.3 Autenticação e autorização (TST-A)
 
@@ -246,7 +250,7 @@ Todos rodam com `cluster.Start(3)`, distribuindo as requisições entre as inst�
 
 ## 6. Verificação de consistência (`testkit.AssertWalletConsistent`)
 
-Registrada automaticamente para toda carteira criada via `testkit`. Executada no `t.Cleanup`, depois de `Eventually` confirmar que não há pendências nem outbox em aberto relacionadas à carteira.
+Registrada automaticamente para toda carteira criada via `testkit`. Executada no `t.Cleanup`, depois de `Eventually` confirmar que não há pendências nem outbox em aberto relacionadas à carteira. Os itens 2–6 são SQL puro, em `testkit.LedgerProblems` (M2), cuja sensibilidade é provada por um teste que grava cada divergência com os triggers desligados; o M3 acrescenta os itens 1 e 7.
 
 1. `POST /wallets/{id}/reconciliation` devolve `consistent: true` e `difference = 0.00`.
 2. SQL direto: `balance_minor == Σ CREDIT − Σ DEBIT`.

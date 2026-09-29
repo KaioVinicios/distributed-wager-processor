@@ -64,7 +64,7 @@ flowchart LR
 - **Moedas:** toda operação ou comparação exige a mesma moeda. O contrário gera `ErrCurrencyMismatch`, verificável com `errors.Is`.
 - **Serialização:** sempre `{"amount":"25.00","currency":"BRL"}`, com marshal e unmarshal próprios. Valores negativos só aparecem em respostas (ex.: `difference` = `"-5.00"`); na entrada, são rejeitados.
 - **Zero value e JSON:** `Money{}` é rejeitado por toda operação que devolve erro, inclusive o marshal. O tipo não tem `IsZero()`, para que o `omitzero` do `encoding/json` não omita um `"0.00"` legítimo. O unmarshal recusa campo desconhecido, campo ausente, `null` e `amount` numérico.
-- **Persistência:** colunas `*_minor BIGINT` + `currency CHAR(3)`. As somas no banco (reconciliação) retornam `numeric` e são convertidas para `int64` com verificação de overflow.
+- **Persistência:** colunas `*_minor BIGINT` + `currency CHAR(3)`; `NULL` ↔ `Money{}` (ausente). As somas no banco (reconciliação) retornam `numeric` e voltam como `bigint` pelo cast, que falha com erro permanente em caso de overflow. O saldo observado de uma transação (`result_balance_minor`) é um saldo da carteira: é reconstruído na moeda da carteira, que numa rejeição `CURRENCY_MISMATCH` difere da moeda da operação.
 - **Garantia contra float:** o linter `forbidigo` proíbe `float32`/`float64` e `strconv.ParseFloat` fora do pacote de observabilidade, e um teste que analisa a AST do pacote `money` falha se encontrar ponto flutuante.
 
 Detalhes: [`docs/decisions.md`](docs/decisions.md) D-03.
@@ -75,12 +75,15 @@ Detalhes: [`docs/decisions.md`](docs/decisions.md) D-03.
 
 ### 3.1 Biblioteca
 
-**`pgx/v5` com SQL explícito**, sem ORM e sem geração de código. É a opção preferencial do desafio e mantém **visíveis** no código tudo o que sustenta as garantias: `SELECT … FOR UPDATE`, `SET LOCAL lock_timeout`, `FOR UPDATE SKIP LOCKED` e constraints nomeadas. As migrations usam `golang-migrate`, com arquivos `up`/`down` versionados.
+**`pgx/v5` com SQL explícito**, sem ORM e sem geração de código. É a opção preferencial do desafio e mantém **visíveis** no código tudo o que sustenta as garantias: `SELECT … FOR UPDATE`, `SET LOCAL lock_timeout`, `FOR UPDATE SKIP LOCKED` e constraints nomeadas. As migrations usam `golang-migrate`, com arquivos `up`/`down` versionados em `migrations/`, aplicados pelo serviço `migrate` do compose como `pda_owner` antes das réplicas (`make migrate-up` e `make migrate-down N=1`). A aplicação nunca executa DDL. Os testes aplicam os mesmos arquivos, embutidos, num banco isolado por pacote.
 
 ### 3.2 Delimitação da transação SQL
 
 - **Unit of Work explícito:** `uow.Do(ctx, func(r Repos) error)`. `Repos` expõe os repositórios de carteira, transação, ledger, inbox e outbox, **todos ligados à mesma `pgx.Tx`**. Se a função retornar `nil`, há commit; qualquer erro ou `panic` leva a rollback.
 - **A transação não fica escondida no `context`.** Quem recebe `Repos` está dentro da transação, e isso aparece na assinatura. As interfaces pertencem à camada `app`, e o domínio não conhece o UoW.
+- **Dois modos:** `uow.Do` (`READ COMMITTED`, com `lock_timeout` na transação inteira) para escrever, e `uow.Snapshot` (`REPEATABLE READ READ ONLY`) para a reconciliação. Fora de transação, os mesmos repositórios servem as leituras sobre o pool.
+- **Tipos do domínio nas portas:** os repositórios recebem e devolvem `Wallet`, `WagerTransaction` e `LedgerEntry`, reidratados pelo adapter. Linha que o domínio recusa, ou valor inválido na escrita, é erro permanente.
+- **Erros do banco classificados no adapter:** as violações de unicidade que o `app` trata viram sentinelas (`ErrWalletAlreadyExists` como conflito; corridas de idempotência, reversão e inbox como transitórias, que um retry resolve pela releitura); SQLSTATEs transitórios (lock timeout, deadlock, conexão) viram `Transient`; o resto é `Permanent`. O erro do PostgreSQL não sai do adapter, porque o `Detail` traz a linha inteira. Uma transação interrompida pelo `context` é transitória.
 - **Uma operação financeira é uma única transação:**
   1. trava a carteira;
   2. insere a transação no estado final;
@@ -121,7 +124,7 @@ Detalhes: [`docs/data-model.md`](docs/data-model.md) e [`docs/decisions.md`](doc
 
 ## 4. Concorrência e locks
 
-**Decisão:** **lock pessimista por carteira.** Cada operação financeira faz `SET LOCAL lock_timeout = '5s'` e `SELECT … FROM wallets WHERE id = $1 FOR UPDATE` dentro da transação.
+**Decisão:** **lock pessimista por carteira.** Cada operação financeira define o `lock_timeout` local da transação (`DB_LOCK_TIMEOUT`, padrão 5 s, por `set_config`, o `SET LOCAL` parametrizável) e faz `SELECT … FROM wallets WHERE id = $1 FOR UPDATE`.
 
 - **Sem lost update:** o lock serializa os escritores da mesma carteira. O `UPDATE` ainda confere `version = $old`, como segunda proteção, e o `CHECK (balance_minor >= 0)` é a última linha de defesa.
 - **Sem lock global:** carteiras diferentes não disputam nada e avançam em paralelo. Um teste segura o lock da carteira X e confirma que operações na carteira Y seguem normalmente.
@@ -458,7 +461,7 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 
 ## 17. Trabalho não concluído
 
-*Preenchido na entrega.* Estado em 29/09/2026: **M0 e M1 concluídos**. O M0 entregou o esqueleto Fx, health, métricas, compose com 3 réplicas, Keycloak provisionado, MiniStack com IAM aplicado e tooling de qualidade. O M1 entregou o domínio (Money, carteira e ledger, máquina de estados, regras por tipo, referências, hash e idempotência, eventos) e o vocabulário de erros, com a tabela U do test-plan verde. A persistência começa no M2. Os diferenciais opcionais (tracing com OpenTelemetry, dashboards, teste de carga e ledger de partidas dobradas) só serão feitos se houver folga ([`docs/implementation-plan.md`](docs/implementation-plan.md) M12).
+*Preenchido na entrega.* Estado em 29/09/2026: **M0, M1 e M2 concluídos**. O M0 entregou o esqueleto Fx, health, métricas, compose com 3 réplicas, Keycloak provisionado, MiniStack com IAM aplicado e tooling de qualidade. O M1 entregou o domínio (Money, carteira e ledger, máquina de estados, regras por tipo, referências, hash e idempotência, eventos) e o vocabulário de erros, com a tabela U do test-plan verde. O M2 entregou a persistência: migrations com todas as constraints, triggers e grants, o Unit of Work e os repositórios, provados contra o PostgreSQL real, inclusive todos os fluxos do domínio gravados de ponta a ponta. Casos de uso, HTTP e autenticação vêm no M3. Os diferenciais opcionais (tracing com OpenTelemetry, dashboards, teste de carga e ledger de partidas dobradas) só serão feitos se houver folga ([`docs/implementation-plan.md`](docs/implementation-plan.md) M12).
 
 ---
 

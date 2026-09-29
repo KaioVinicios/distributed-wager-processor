@@ -60,21 +60,23 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 
 **Cobre:** MON-*, DOM-*, WAL-01..07, TX-01..08, LED-01..02, OPS-01..11, OPS-15, IDEM-03..06, OUT-08, OUT-09, OUT-11..13 (vários parciais, completados no banco ou nas bordas; ver a spec). **Eliminatório: E3.** Spec: [`dev/specs/2026-09-29-m1-domain-design.md`](dev/specs/2026-09-29-m1-domain-design.md) · plano: [`dev/plans/2026-09-29-m1-domain.md`](dev/plans/2026-09-29-m1-domain.md).
 
-#### M2 — Persistência (~3 h)
+#### M2 — Persistência (~3 h) — ✅ concluído em 29/09
 
 - Migrations 000001–000006 conforme [`data-model.md`](data-model.md): tabelas, constraints, índices, triggers e grants.
 - Adapter `postgres`: pool, `UnitOfWork`, repositórios de wallet, transaction, ledger, outbox e inbox, mapeamento de `Money`, tradução de SQLSTATE e nomes de constraint.
-- `testkit.NewEnv` (apenas o banco isolado, por enquanto).
+- `testkit.NewEnv` (apenas o banco isolado; as filas entram no M4/M5).
 - Tradução de erros do PostgreSQL (U09b).
-- Testes I01, I02a–d, I03a/b e I16.
+- Testes I01, I02a–e, I03a, I03b (parcial), I16, I17 (os fluxos do domínio gravados de ponta a ponta), I18 e I19.
+- **Entregue também:** as portas de persistência em `internal/app` (`UnitOfWork` com `Do` e `Snapshot`, `Repos`, sentinelas das corridas), o serviço `migrate` no compose e `make migrate-up`/`migrate-down`, `DB_LOCK_TIMEOUT` e `testkit.LedgerProblems` (a parte SQL da verificação de consistência).
 
 **Pronto quando:** `make test-integration` passa com esses testes.
 
-**Cobre:** DB-*, WAL-03..06, LED-03..06, TX-05, TX-07, ART-05. **Eliminatórios: E4 (constraint), E9.**
+**Cobre:** DB-01..03, DB-05, WAL-03, WAL-06, WAL-07, LED-03..06, TX-05, TX-07, OPS-08, IDEM-07, OUT-01, ART-05; parciais: DB-04 (README no M10), WAL-04, TX-09, IDEM-02, SQS-03. **Eliminatórios: E4 (constraint), E9.** Spec: [`dev/specs/2026-09-29-m2-persistence-design.md`](dev/specs/2026-09-29-m2-persistence-design.md) · plano: [`dev/plans/2026-09-29-m2-persistence.md`](dev/plans/2026-09-29-m2-persistence.md).
 
 #### M3 — Contrato, casos de uso, HTTP e autenticação (~5 h)
 
 - `app`: `OpenWallet`, `ProcessWagerTransaction` (pipeline do lifecycle §6.1), `GetWallet`, `ListLedger`, `GetTransaction`, `GetTransactionByExternalId` e `Reconcile`. Os casos de uso chamam `wagering.NewCommand`, `CheckIdempotency`, `Settle` e `OpenWallet` e selam os eventos com `events.Seal`.
+- **Persistência pronta (M2):** os casos de uso recebem `app.UnitOfWork` e `app.Repos` e seguem a ordem de escrita que os triggers exigem (transação no estado final → saldo → lançamento → outbox), como fazem os helpers do I17. As corridas chegam como sentinelas (`app.ErrIdempotencyRace`, `ErrReversalRace`, `ErrWalletAlreadyExists`), e `ErrNotFound` vira `UNKNOWN_WALLET`, `WALLET_NOT_FOUND` ou `TRANSACTION_NOT_FOUND`, conforme a rota. O I03b se completa aqui (replay com 500). Pendência da revisão do M2: `Ledger.List`/`Sum` e `AdvanceDependents` não filtram ID malformado como `Get`/`Lock`; os casos de uso validam o ID (ou leem a carteira) antes de chamá-los.
 - **Tradução de erros do domínio:** o `app` mapeia explicitamente os erros de invariante (`money.ErrOverflow`, `wagering.ErrInvalidSnapshot`, `ErrInvalidArgument`, `ErrInvalidTransition`, `wallet.ErrInvalidLedgerEntry`…) para `apperrors.KindPermanent`, e `*ValidationError`/`*ConflictError` para `KindInput`/`KindConflict`. Sem isso, pela D-05, eles seriam tratados como transitórios.
 - `auth`: verificador OIDC com `OIDC_ISSUER` separado de `OIDC_JWKS_URL`, `Principal`, roles e regras da matriz D-07.
 - **Spec do marco = contrato primeiro (D-20):** `api/openapi.yaml` escrito e aprovado **antes** dos handlers, junto com `api/requests.http`.
@@ -92,7 +94,7 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 
 #### M4 — Outbox publisher (~2,5 h)
 
-- Adapter `outbox`: claim com `SKIP LOCKED` + lease, publicação no SNS FIFO, confirmação condicional, backoff, recuperação de lease e métricas de atraso.
+- Adapter `outbox`: o `OutboxRepository` do M2 ganha claim com `SKIP LOCKED` + lease (o payload é `JSONB`: o publisher envia o JSON lido da coluna, idêntico em toda republicação), publicação no SNS FIFO, confirmação condicional, backoff, recuperação de lease e métricas de atraso.
 - `testkit`: criação de tópico e fila de auditoria isolados, e leitura da fila de auditoria filtrando por id.
 - Testes I05a–e.
 
@@ -101,7 +103,7 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 #### M5 — Consumidor SQS (~3 h)
 
 - Adapter `sqsconsumer`:
-  - pollers, lotes agrupados por `MessageGroupId`, inbox na mesma UoW e `DeleteMessage` após o commit;
+  - pollers, lotes agrupados por `MessageGroupId`, inbox na mesma UoW (o `InboxRepository` e o `app.ErrInboxDuplicate` já existem desde o M2) e `DeleteMessage` após o commit;
   - envio explícito para a DLQ, backoff com `ChangeMessageVisibility` e pausa por saúde;
   - shutdown em 5 passos ([`messaging.md`](messaging.md) §4).
 - Testes I04a–f.
@@ -110,7 +112,7 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 
 #### M6 — Worker de referências (~1,5 h)
 
-- Adapter `references`: claim, lock carteira → transação e chamada ao `wagering.Settle` (reavaliação, reagendamento e expiração já estão no domínio desde o M1); antecipação das pendências dependentes no caso de uso.
+- Adapter `references`: claim (novo método no `TransactionRepository`, com o `Lock` da transação), lock carteira → transação e chamada ao `wagering.Settle` (reavaliação, reagendamento e expiração já estão no domínio desde o M1); antecipação das pendências dependentes no caso de uso.
 - Testes I06 e I11 (reversões completas).
 
 **Cobre:** OPS-12..14, TX-09.
@@ -190,7 +192,9 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | Testes de concorrência instáveis | Falhas intermitentes | Barreira de largada, `Eventually` com prazo e repetição N× com carteiras novas (test-plan §1) |
 | Deadlock entre o worker de referências e o HTTP | `40P01` nos testes | Ordem fixa de lock: carteira → transação ([`data-model.md`](data-model.md) §6) |
 | Relógios divergentes entre instâncias | `updated_at < created_at` rejeitado pelo banco ou na reidratação | ✅ Tratado no M1: `updatedAt` tem `createdAt` como piso (`TestTransitionClockSkew`, `TestWalletDebit`) |
-| Erro de invariante do domínio tratado como transitório (D-05) | 503 repetido em vez de `FAILED` | Tradução explícita para `KindPermanent` no `app` (M3) |
+| Erro de invariante do domínio tratado como transitório (D-05) | 503 repetido em vez de `FAILED` | Tradução explícita para `KindPermanent` no `app` (M3). No adapter, já tratado no M2: valor de domínio inválido na escrita e linha que o domínio recusa são permanentes |
+| ~~Domínio e schema divergirem (ordem de escrita, coerência ledger × transação)~~ | `PDA04` nos fluxos reais | ✅ Descartado no M2: o I17 grava todos os tipos pelo caminho real e passa pelos triggers |
+| Payload da outbox comparado byte a byte | Republicação "diferente" do `MarshalJSON` | `JSONB` normaliza o texto; o contrato é o JSON lido da coluna (data-model §3.5), e os testes comparam como JSON |
 | Estouro de prazo | Checkpoint do dia não atingido | Ordem de corte (§4), sempre preservando os eliminatórios |
 
 ---
@@ -202,10 +206,10 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | E1 Autenticação efetiva | M3 | M3 (A01) |
 | E2 Acesso não autorizado | M3 | M3 (A02, A03) |
 | E3 Ponto flutuante | M1 ✅ | M1 (U01a–g, com o U01g analisando a AST) |
-| E4 Saldo negativo por concorrência | M2 + M3 | M3 (C02 em processo), M8 (C02, C10b) |
+| E4 Saldo negativo por concorrência | M2 ✅ (constraint) + M3 | M2 (I02a, `CHECK`), M3 (C02 em processo), M8 (C02, C10b) |
 | E5 Movimentação duplicada | M3 + M5 | M5 (I04a), M8 (C01, C05, C10) |
-| E6 Idempotência só em memória | M2 + M3 | M6 (I06), M8 (C08) |
+| E6 Idempotência só em memória | M2 ✅ (índices únicos) + M3 | M2 (I02a, I18), M6 (I06), M8 (C08) |
 | E7 Dependência de instância única | M3–M6 | M8 (cluster com 3 processos) |
 | E8 Publicação antes do commit | M4 | M4 (I05b) |
-| E9 Ledger auditável | M2 | M2 (I02b, I02c) + test-plan §6 |
+| E9 Ledger auditável | M2 ✅ | M2 (I02b, I02c, I17 com `LedgerProblems`) + test-plan §6 |
 | E10 Mocks no lugar da infraestrutura | M0 (infraestrutura real) | Todos os marcos com testes de integração e e2e |

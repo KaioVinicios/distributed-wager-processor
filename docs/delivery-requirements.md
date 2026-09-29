@@ -46,7 +46,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [x] **ART-02** `go.mod` e `go.sum` versionados, com a versão do Go declarada em `go.mod`. *(M0, 29/09: `go.mod` com `go 1.27.1` e `go.sum`; `make tidy-check`.)*
 - [x] **ART-03** `Dockerfile` declarando a mesma versão do Go. *(M0, 29/09: `make go-version-check` (go.mod = Dockerfile = 1.27.1).)*
 - [x] **ART-04** `docker-compose.yml` subindo aplicação, PostgreSQL, Keycloak (ou outro IdP) e LocalStack/MiniStack. *(M0, 29/09: `docker compose up --build --wait`: postgres, keycloak, ministack, aws-init e app-1..3 saudáveis.)*
-- [ ] **ART-05** Migrations versionadas, com `up` e `down`.
+- [x] **ART-05** Migrations versionadas, com `up` e `down`. *(M2, 29/09: `TestMigrationsUpDownUp`; serviço `migrate` e `make migrate-up`/`migrate-down`.)*
 - [x] **ART-06** Provisionamento automático das filas `wager-transactions.fifo` e `wager-transactions-dlq.fifo` com redrive, além do destino dos eventos de saída. *(M0, 29/09: `deploy/aws/init.sh`; `TestProvisioning` (redrive `maxReceiveCount=10`, tópico FIFO, assinatura raw).)*
 - [x] **ART-07** Provisionamento automático do IdP (realm, clients, roles/scopes e identidades de teste). *(M0, 29/09: `deploy/keycloak/realm-*.json` importados; tokens reais conferidos com `scripts/get-token.sh`.)*
 - [ ] **ART-08** `README.md` completo (ver DOC-01).
@@ -114,11 +114,11 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 - [x] **WAL-01** Campos: id, playerId, moeda, saldo, versão, `createdAt` e `updatedAt`. *(M1, 29/09: `TestWalletOpen`.)*
 - [x] **WAL-02** Criação, reidratação e operações de débito/crédito expostas pelo agregado. *(M1, 29/09: `TestWalletDebit`, `TestWalletCredit`, `TestWalletRehydrate`.)*
-- [ ] **WAL-03** O par `(playerId, currency)` é único no banco. Uma segunda abertura resulta em conflito.
-- [~] **WAL-04** ⛔ Débitos preservam saldo `>= 0`, no domínio e por `CHECK` no banco. *(M1, 29/09: domínio: `TestWalletDebit`, `TestKindRules`. Falta o `CHECK` (M2) e a concorrência (M3/M8).)*
+- [x] **WAL-03** O par `(playerId, currency)` é único no banco. Uma segunda abertura resulta em conflito. *(M2, 29/09: `TestConstraints` (`wallets_player_currency_uq`), `TestWalletRepository` (`ErrWalletAlreadyExists`, `KindConflict`). O 409 HTTP é do M3.)*
+- [~] **WAL-04** ⛔ Débitos preservam saldo `>= 0`, no domínio e por `CHECK` no banco. *(M1, 29/09: domínio: `TestWalletDebit`, `TestKindRules`. Falta a concorrência (M3/M8).)* *(M2, 29/09: `CHECK`: `TestConstraints` (saldo negativo).)*
 - [x] **WAL-05** A moeda da movimentação coincide com a moeda da carteira. *(M1, 29/09: `TestWalletDebit` (moeda), `TestSettleEvaluationOrder`.)*
-- [ ] **WAL-06** Toda mudança de saldo tem o lançamento de ledger correspondente no mesmo commit.
-- [x] **WAL-07** A versão inicial é `1` e só é incrementada quando o saldo muda (`LOSS` não incrementa). *(M1, 29/09: `TestWalletOpen`, `TestWalletDebit`, `TestSettleEdgeCases` (LOSS).)*
+- [x] **WAL-06** Toda mudança de saldo tem o lançamento de ledger correspondente no mesmo commit. *(M2, 29/09: `TestLedgerCoupling`, `TestDomainFlowsPersist`, `TestFinancialAtomicity`.)*
+- [x] **WAL-07** A versão inicial é `1` e só é incrementada quando o saldo muda (`LOSS` não incrementa). *(M1, 29/09: `TestWalletOpen`, `TestWalletDebit`, `TestSettleEdgeCases` (LOSS).)* *(M2, 29/09: trigger `PDA03`: `TestGuardTriggers`.)*
 - [ ] **WAL-08** ⛔ Disputas entre escritores não descartam uma atualização confirmada (sem lost update).
 - [ ] **WAL-09** A estratégia de controle de concorrência está documentada.
 
@@ -130,11 +130,11 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [~] **TX-02** Uma transação externa registra: id interno, id externo, provedor, chave de idempotência, hash do payload, carteira, jogador, rodada, jogo, tipo, `Money`, referência externa opcional, estado e timestamps. *(M1, 29/09: `TestNewExternal`, `TestRehydrate`. Falta a persistência (M2).)*
 - [~] **TX-03** Quando aplicável, persiste também: a referência interna resolvida, o `failureCode` e o resultado financeiro devolvido ao provedor (saldo observado). *(M1, 29/09: `TestTransitionResults`, `TestRehydrate`. Falta a persistência (M2).)*
 - [~] **TX-04** Uma transação `OPENING` registra identidade interna estável, carteira, jogador, moeda, valor, estado e timestamps. Os campos externos não se aplicam. *(M1, 29/09: `TestNewOpening`, `TestOpening`. Falta a persistência (M2).)*
-- [ ] **TX-05** O schema distingue origem interna de externa (ex.: coluna `origin` + `CHECK`) e impede um crédito inicial duplicado (índice único parcial).
+- [x] **TX-05** O schema distingue origem interna de externa (ex.: coluna `origin` + `CHECK`) e impede um crédito inicial duplicado (índice único parcial). *(M2, 29/09: `TestConstraints` (`wager_tx_origin_kind`, `wager_tx_internal_fields`, `wager_tx_single_opening_uq`).)*
 - [x] **TX-06** Máquina de estados validada pelo domínio: `PENDING`, `PENDING_REFERENCE`, `PROCESSED`, `REJECTED`, `FAILED`. *(M1, 29/09: `TestTransactionStateMachine`.)*
-- [~] **TX-07** Estados terminais (`PROCESSED`, `REJECTED`, `FAILED`) não aceitam novas transições. *(M1, 29/09: `TestTransactionStateMachine` (terminais → `ErrInvalidTransition`). Falta o trigger `PDA02` (M2).)*
+- [x] **TX-07** Estados terminais (`PROCESSED`, `REJECTED`, `FAILED`) não aceitam novas transições. *(M1, 29/09: `TestTransactionStateMachine` (terminais → `ErrInvalidTransition`).)* *(M2, 29/09: trigger `PDA02`: `TestTerminalTransactionImmutable`, `TestGuardTriggers`.)*
 - [ ] **TX-08** Um replay consulta o resultado persistido sem reaplicar a operação.
-- [ ] **TX-09** ⛔ Todo `PENDING` confirmado tem retomada durável por outra instância. Operações sem dependências podem ser concluídas de forma síncrona, sem commit intermediário de aceite.
+- [~] **TX-09** ⛔ Todo `PENDING` confirmado tem retomada durável por outra instância. Operações sem dependências podem ser concluídas de forma síncrona, sem commit intermediário de aceite. *(M2, 29/09: `PENDING` não é persistível e `PENDING_REFERENCE` sempre tem agenda: `TestConstraints`; retomada de uma pendência gravada: `TestDomainFlowsPersist`. Falta o worker (M6) e a prova multi-instância (C08).)*
 - [x] **TX-10** A máquina de estados e a distinção entre falha transitória e permanente estão documentadas. *(M1, 29/09: `transaction-lifecycle.md` §1 e §8; `TestClassify`.)*
 
 ---
@@ -143,10 +143,10 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 - [x] **LED-01** Campos: `id`, `walletId`, `transactionId`, direção (`DEBIT`/`CREDIT`), valor, saldo anterior, saldo posterior e `createdAt`. *(M1, 29/09: `TestLedgerEntryInvariant`.)*
 - [x] **LED-02** Um lançamento é imutável, e o construtor valida `balanceAfter = balanceBefore ± money`. *(M1, 29/09: `TestLedgerEntryInvariant`.)*
-- [ ] **LED-03** ⛔ `UNIQUE (walletId, transactionId)` no banco.
-- [ ] **LED-04** ⛔ Append-only imposto pelo banco: trigger bloqueando `UPDATE`/`DELETE`/`TRUNCATE` e/ou `REVOKE` de privilégios.
-- [ ] **LED-05** `LOSS` e operações rejeitadas não produzem lançamento (garantido também por trigger no banco, [`data-model.md`](data-model.md) §4.2).
-- [ ] **LED-06** `CHECK`s no banco: valor `> 0`, coerência before/after conforme a direção e `balanceAfter >= 0`.
+- [x] **LED-03** ⛔ `UNIQUE (walletId, transactionId)` no banco. *(M2, 29/09: `TestConstraints` (`ledger_wallet_tx_uq`).)*
+- [x] **LED-04** ⛔ Append-only imposto pelo banco: trigger bloqueando `UPDATE`/`DELETE`/`TRUNCATE` e/ou `REVOKE` de privilégios. *(M2, 29/09: `TestLedgerImmutable` (owner, `PDA01`), `TestLedgerImmutableForApp` (`42501`), `TestAppRolePrivileges`.)*
+- [x] **LED-05** `LOSS` e operações rejeitadas não produzem lançamento (garantido também por trigger no banco, [`data-model.md`](data-model.md) §4.2). *(M2, 29/09: `TestLedgerCoupling`, `TestDomainFlowsPersist`.)*
+- [x] **LED-06** `CHECK`s no banco: valor `> 0`, coerência before/after conforme a direção e `balanceAfter >= 0`. *(M2, 29/09: `TestConstraints`.)*
 - [ ] **LED-07** ⭐ Ledger de partidas dobradas.
 
 ---
@@ -160,7 +160,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [x] **OPS-05** `ROLLBACK`: movimento contrário que desfaz integralmente uma `BET`, `WIN` ou `REFUND` processada. *(M1, 29/09: `TestKindRules`.)*
 - [x] **OPS-06** `referenceExternalTransactionId` é obrigatório em `REFUND`/`ROLLBACK` e é resolvido por `(providerId, referenceExternalTransactionId)`. *(M1, 29/09: `TestNewCommand` (`REFERENCE_REQUIRED`), `TestReferenceResolution`.)*
 - [x] **OPS-07** A operação e sua referência concordam em provedor, jogador, carteira, moeda e rodada, e o valor é igual. Reversões parciais não são aceitas. *(M1, 29/09: `TestReferenceResolution` (R5, R6), `TestSettleEvaluationOrder`.)*
-- [~] **OPS-08** ⛔ Uma referência não recebe duas reversões bem-sucedidas do mesmo tipo, com garantia no banco. *(M1, 29/09: `TestReferenceResolution` (R7). Falta o índice `wager_tx_single_reversal_uq` (M2).)*
+- [x] **OPS-08** ⛔ Uma referência não recebe duas reversões bem-sucedidas do mesmo tipo, com garantia no banco. *(M1, 29/09: `TestReferenceResolution` (R7).)* *(M2, 29/09: `wager_tx_single_reversal_uq`: `TestConstraints`, `TestTransactionQueries` (`ErrReversalRace`), `TestDomainFlowsPersist` (`ALREADY_REVERSED`).)*
 - [x] **OPS-09** A política para combinações de `REFUND` e `ROLLBACK` sobre a mesma aposta está documentada e impede a devolução duplicada do mesmo débito. *(M1, 29/09: `TestReferenceResolution` (R7, "ROLLBACK after a REFUND") + D-10.)*
 - [x] **OPS-10** Uma reversão que debitaria mais que o saldo disponível é `REJECTED`, auditável, com código **diferente** do usado para aposta sem saldo. *(M1, 29/09: `TestKindRules` (`REVERSAL_INSUFFICIENT_FUNDS`), `TestFailureCatalog`.)*
 - [x] **OPS-11** Valor zero só é aceito no saldo inicial e em `LOSS`. *(M1, 29/09: `TestZeroAmountPolicy`, `TestOpening`.)*
@@ -174,12 +174,12 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 ## 9. Idempotência (§5.2, §9)
 
 - [ ] **IDEM-01** ⛔ A idempotência é persistente e sobrevive ao reinício de todos os processos.
-- [ ] **IDEM-02** O header `Idempotency-Key` é obrigatório no HTTP. O servidor não substitui silenciosamente a chave recebida.
+- [~] **IDEM-02** O header `Idempotency-Key` é obrigatório no HTTP. O servidor não substitui silenciosamente a chave recebida. *(M2, 29/09: unicidade `(provider_id, idempotency_key)`: `TestConstraints`, `TestTransactionQueries`. O header é do M3.)*
 - [x] **IDEM-03** Hash determinístico dos campos de negócio em JSON canônico com chaves ordenadas. A chave e os metadados de transporte ficam fora do cálculo. Algoritmo, campos e normalizações estão documentados. *(M1, 29/09: `TestPayloadHashGolden` (SHA calculado com `shasum`).)*
 - [~] **IDEM-04** O hash é equivalente entre HTTP e SQS para a mesma operação. *(M1, 29/09: `TestPayloadHashHTTPEqualsSQS` sobre a entrada do domínio. Faltam o DTO e o envelope reais (M3/M5).)*
 - [x] **IDEM-05** Mesma chave e mesmo conteúdo: devolve o resultado persistido com `idempotentReplay: true`. *(M1, 29/09: `TestIdempotencyDecision`.)*
 - [x] **IDEM-06** Mesma chave com conteúdo diferente: conflito. *(M1, 29/09: `TestIdempotencyDecision`.)*
-- [~] **IDEM-07** ⛔ `(providerId, externalTransactionId)` não pode ser reaplicado usando outra chave. *(M1, 29/09: `TestIdempotencyDecision`. Falta o índice `wager_tx_external_id_uq` (M2).)*
+- [x] **IDEM-07** ⛔ `(providerId, externalTransactionId)` não pode ser reaplicado usando outra chave. *(M1, 29/09: `TestIdempotencyDecision`.)* *(M2, 29/09: `wager_tx_external_id_uq`: `TestConstraints`, `TestTransactionQueries` (`ErrIdempotencyRace`).)*
 - [ ] **IDEM-08** O replay de uma operação concluída devolve o saldo observado no processamento original.
 
 ---
@@ -213,7 +213,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 - [ ] **SQS-01** Filas `wager-transactions.fifo` e `wager-transactions-dlq.fifo` provisionadas, com redrive configurado.
 - [ ] **SQS-02** HTTP e SQS compartilham o mesmo caso de uso e as mesmas garantias. A chave de idempotência vem de `data.idempotencyKey`.
-- [ ] **SQS-03** Inbox com `UNIQUE (consumerName, messageId)`, usando o `messageId` do envelope como identidade durável. O hash é verificado em reentregas.
+- [~] **SQS-03** Inbox com `UNIQUE (consumerName, messageId)`, usando o `messageId` do envelope como identidade durável. O hash é verificado em reentregas. *(M2, 29/09: `inbox_pk`: `TestConstraints`, `TestInboxRepository` (`ErrInboxDuplicate`). O consumidor e o hash são do M5.)*
 - [ ] **SQS-04** Inbox, conclusão do tratamento, domínio, ledger e outbox compartilham a mesma transação SQL.
 - [ ] **SQS-05** A mensagem só é removida da fila após o commit do tratamento durável.
 - [ ] **SQS-06** Uma rejeição de negócio confirmada é terminal e permite remover a mensagem.
@@ -227,7 +227,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 13. Transactional outbox e eventos (§5.4, §6.5, §11)
 
-- [ ] **OUT-01** Tabela de outbox com: identidade estável do evento, agregado, tipo, payload (snapshot imutável), `occurredAt`, tentativas, próximo envio e `publishedAt`.
+- [x] **OUT-01** Tabela de outbox com: identidade estável do evento, agregado, tipo, payload (snapshot imutável), `occurredAt`, tentativas, próximo envio e `publishedAt`. *(M2, 29/09: `TestOutboxRepository`, `TestGuardTriggers` (`PDA05`), `TestConstraints`.)*
 - [ ] **OUT-02** ⛔ Os registros de outbox são gravados atomicamente com o estado da operação, o saldo, o ledger e a inbox.
 - [ ] **OUT-03** ⛔ Um worker separado publica a outbox e suporta múltiplos publishers, disputa por registros (ex.: `FOR UPDATE SKIP LOCKED` + lease) e recuperação de trabalho abandonado.
 - [ ] **OUT-04** Retry com backoff em falha de publicação.
@@ -245,11 +245,11 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 14. Persistência (§4, §5.3, §5.8)
 
-- [ ] **DB-01** PostgreSQL, com `pgx` e SQL explícito (preferencial; `sqlc` opcional).
-- [ ] **DB-02** Transações, locks e constraints explícitos e verificáveis.
-- [ ] **DB-03** ⛔ Unicidade, não negatividade e imutabilidade do ledger impostas pelo schema, pelas constraints e pelos mecanismos de proteção do banco.
-- [ ] **DB-04** Migrations versionadas, com os comandos de aplicação e reversão documentados.
-- [ ] **DB-05** `ARCHITECTURE.md` documenta a biblioteca escolhida, o mapeamento de `Money` e como a transação SQL é delimitada entre os repositórios.
+- [x] **DB-01** PostgreSQL, com `pgx` e SQL explícito (preferencial; `sqlc` opcional). *(M2, 29/09: adapter `postgres`; `TestWalletRepository`, `TestTransactionRepository`.)*
+- [x] **DB-02** Transações, locks e constraints explícitos e verificáveis. *(M2, 29/09: `TestUnitOfWork` (commit, rollback, `lock_timeout`, snapshot), `TestPostgresErrorMapping`.)*
+- [x] **DB-03** ⛔ Unicidade, não negatividade e imutabilidade do ledger impostas pelo schema, pelas constraints e pelos mecanismos de proteção do banco. *(M2, 29/09: `TestConstraints`, `TestLedgerImmutable`, `TestLedgerCoupling`, `TestTerminalTransactionImmutable`, `TestGuardTriggers`.)*
+- [~] **DB-04** Migrations versionadas, com os comandos de aplicação e reversão documentados. *(M2, 29/09: `TestMigrationsUpDownUp`; comandos em `data-model.md` §7 e no `Makefile`. Falta o README (M10).)*
+- [x] **DB-05** `ARCHITECTURE.md` documenta a biblioteca escolhida, o mapeamento de `Money` e como a transação SQL é delimitada entre os repositórios. *(M2, 29/09: `ARCHITECTURE.md` §2 e §3.)*
 
 ---
 
