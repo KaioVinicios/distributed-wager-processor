@@ -81,44 +81,44 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 3. Money (§5.1, §6.1)
 
-- [ ] **MON-01** ⛔ Nenhum `float32`/`float64` no parsing, no cálculo, na serialização ou na persistência de dinheiro.
+- [x] **MON-01** ⛔ Nenhum `float32`/`float64` no parsing, no cálculo, na serialização ou na persistência de dinheiro. *(M1, 29/09: U01g `TestNoFloatInMoney` (AST) + `forbidigo`; `TestMoneyJSON` (valores como string).)*
   *Evidência:* código do tipo, marshal/unmarshal próprios e testes.
-- [ ] **MON-02** Value object imutável com valor e moeda, suportando: criação a partir de string decimal, zero por moeda, soma, subtração, negação, comparação e serialização.
-- [ ] **MON-03** Representação em `int64` com unidades mínimas ou decimal exato, com limites documentados.
-- [ ] **MON-04** Contrato externo `{"amount":"25.00","currency":"BRL"}`, com escala fixa de 2 casas e moeda ISO 4217.
-- [ ] **MON-05** Rejeição de valores vazios, `NaN`, `Infinity`, notação científica, escala excedente e negativos nas entradas externas. Nada é arredondado silenciosamente.
-- [ ] **MON-06** Se formas equivalentes forem aceitas (ex.: `"25"` → `"25.00"`), a normalização anterior ao hash de idempotência está documentada. *(Para `amount`, não se aplica: o formato é estrito e nenhuma forma equivalente é aceita (D-03). A única normalização, UUID em minúsculas, está documentada em D-08.)*
-- [ ] **MON-07** Aritmética e comparação exigem moedas compatíveis, com erro tipado quando não forem.
-- [ ] **MON-08** Com `int64`, overflow é tratado no parsing, na soma, na subtração e na negação (incluindo `math.MinInt64`).
-- [ ] **MON-09** Valores negativos são permitidos em cálculos internos, mas não no saldo da carteira.
+- [x] **MON-02** Value object imutável com valor e moeda, suportando: criação a partir de string decimal, zero por moeda, soma, subtração, negação, comparação e serialização. *(M1, 29/09: `TestParseMoney`, `TestMoneyArithmetic`, `TestMoneyJSON`.)*
+- [x] **MON-03** Representação em `int64` com unidades mínimas ou decimal exato, com limites documentados. *(M1, 29/09: `int64` em centavos; limites em `TestParseMoney` e `ARCHITECTURE.md` §2.)*
+- [x] **MON-04** Contrato externo `{"amount":"25.00","currency":"BRL"}`, com escala fixa de 2 casas e moeda ISO 4217. *(M1, 29/09: `TestMoneyJSON`, `TestParseCurrency`.)*
+- [x] **MON-05** Rejeição de valores vazios, `NaN`, `Infinity`, notação científica, escala excedente e negativos nas entradas externas. Nada é arredondado silenciosamente. *(M1, 29/09: `TestParseMoney`, `FuzzParseMoney`.)*
+- [x] **MON-06** Se formas equivalentes forem aceitas (ex.: `"25"` → `"25.00"`), a normalização anterior ao hash de idempotência está documentada. *(Para `amount`, não se aplica: o formato é estrito e nenhuma forma equivalente é aceita (D-03). A única normalização, UUID em minúsculas, está documentada em D-08.)* *(M1, 29/09: não se aplica ao `amount` (D-03); a normalização de UUID é coberta por `TestPayloadHashHTTPEqualsSQS`.)*
+- [x] **MON-07** Aritmética e comparação exigem moedas compatíveis, com erro tipado quando não forem. *(M1, 29/09: `TestMoneyCurrencyMismatch` (`ErrCurrencyMismatch`).)*
+- [x] **MON-08** Com `int64`, overflow é tratado no parsing, na soma, na subtração e na negação (incluindo `math.MinInt64`). *(M1, 29/09: `TestParseMoney`, `TestMoneyArithmetic` (inclui `Negate(MinInt64)`), `TestSettleEdgeCases`.)*
+- [~] **MON-09** Valores negativos são permitidos em cálculos internos, mas não no saldo da carteira. *(M1, 29/09: domínio: `TestMoneyArithmetic` (negativos internos), `TestWalletDebit` (saldo nunca negativo). Falta o `CHECK` no banco (M2).)*
 - [ ] **MON-10** A persistência preserva exatamente valor e moeda (ex.: `BIGINT` em unidades mínimas + `CHAR(3)`).
-- [ ] **MON-11** Um `Money` não inicializado (zero value do struct) é rejeitado.
-- [ ] **MON-12** Os cenários podem usar apenas BRL, desde que o tipo carregue a moeda e existam testes de incompatibilidade entre moedas.
+- [x] **MON-11** Um `Money` não inicializado (zero value do struct) é rejeitado. *(M1, 29/09: `TestMoneyZeroValue`.)*
+- [x] **MON-12** Os cenários podem usar apenas BRL, desde que o tipo carregue a moeda e existam testes de incompatibilidade entre moedas. *(M1, 29/09: `TestMoneyCurrencyMismatch`.)*
 
 ---
 
 ## 4. Modelo de domínio: regras gerais (§6)
 
-- [ ] **DOM-01** Entidades com estado encapsulado, construtores com validação e métodos explícitos de transição.
-- [ ] **DOM-02** Criação e reidratação separadas. A reidratação não reaplica movimentações, transições nem emissão de eventos.
-- [ ] **DOM-03** Valores de domínio não inicializados ou inválidos são rejeitados.
-- [ ] **DOM-04** Erros de domínio classificáveis por tipo ou por `errors.Is`/`errors.As`.
-- [ ] **DOM-05** Nenhum `panic` representa rejeição de negócio.
+- [x] **DOM-01** Entidades com estado encapsulado, construtores com validação e métodos explícitos de transição. *(M1, 29/09: `TestTransactionStateMachine`, `TestTransitionArgumentValidation`, `TestWalletDebit`.)*
+- [x] **DOM-02** Criação e reidratação separadas. A reidratação não reaplica movimentações, transições nem emissão de eventos. *(M1, 29/09: `TestWalletRehydrate`, `TestRehydrate`.)*
+- [x] **DOM-03** Valores de domínio não inicializados ou inválidos são rejeitados. *(M1, 29/09: `TestZeroValuesRejected` (money, wallet, wagering), `TestParseEnums`, `TestParse` (ident).)*
+- [x] **DOM-04** Erros de domínio classificáveis por tipo ou por `errors.Is`/`errors.As`. *(M1, 29/09: erros sentinela e `*ValidationError`/`*ConflictError` verificados com `errors.Is/As`; `TestClassify`.)*
+- [x] **DOM-05** Nenhum `panic` representa rejeição de negócio. *(M1, 29/09: `FuzzParseMoney`; rejeições são estados (`TestKindRules`), nunca `panic`.)*
 - [ ] **DOM-06** Toda operação de I/O recebe `context.Context` e respeita cancelamento e timeout.
-- [ ] **DOM-07** O domínio não depende de Fx, HTTP, SQS nem de bibliotecas de persistência.
+- [x] **DOM-07** O domínio não depende de Fx, HTTP, SQS nem de bibliotecas de persistência. *(M1, 29/09: U10 `TestDomainHasNoInfraImports` + `depguard`.)*
   *Evidência:* teste que verifica os imports do pacote de domínio (ex.: `go list -deps`) ou regra de lint.
 
 ---
 
 ## 5. Wallet (§6.2)
 
-- [ ] **WAL-01** Campos: id, playerId, moeda, saldo, versão, `createdAt` e `updatedAt`.
-- [ ] **WAL-02** Criação, reidratação e operações de débito/crédito expostas pelo agregado.
+- [x] **WAL-01** Campos: id, playerId, moeda, saldo, versão, `createdAt` e `updatedAt`. *(M1, 29/09: `TestWalletOpen`.)*
+- [x] **WAL-02** Criação, reidratação e operações de débito/crédito expostas pelo agregado. *(M1, 29/09: `TestWalletDebit`, `TestWalletCredit`, `TestWalletRehydrate`.)*
 - [ ] **WAL-03** O par `(playerId, currency)` é único no banco. Uma segunda abertura resulta em conflito.
-- [ ] **WAL-04** ⛔ Débitos preservam saldo `>= 0`, no domínio e por `CHECK` no banco.
-- [ ] **WAL-05** A moeda da movimentação coincide com a moeda da carteira.
+- [~] **WAL-04** ⛔ Débitos preservam saldo `>= 0`, no domínio e por `CHECK` no banco. *(M1, 29/09: domínio: `TestWalletDebit`, `TestKindRules`. Falta o `CHECK` (M2) e a concorrência (M3/M8).)*
+- [x] **WAL-05** A moeda da movimentação coincide com a moeda da carteira. *(M1, 29/09: `TestWalletDebit` (moeda), `TestSettleEvaluationOrder`.)*
 - [ ] **WAL-06** Toda mudança de saldo tem o lançamento de ledger correspondente no mesmo commit.
-- [ ] **WAL-07** A versão inicial é `1` e só é incrementada quando o saldo muda (`LOSS` não incrementa).
+- [x] **WAL-07** A versão inicial é `1` e só é incrementada quando o saldo muda (`LOSS` não incrementa). *(M1, 29/09: `TestWalletOpen`, `TestWalletDebit`, `TestSettleEdgeCases` (LOSS).)*
 - [ ] **WAL-08** ⛔ Disputas entre escritores não descartam uma atualização confirmada (sem lost update).
 - [ ] **WAL-09** A estratégia de controle de concorrência está documentada.
 
@@ -126,23 +126,23 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 6. WagerTransaction (§6.3)
 
-- [ ] **TX-01** Tipos `OPENING`, `BET`, `WIN`, `LOSS`, `REFUND` e `ROLLBACK`. `OPENING` recebido por HTTP ou SQS é rejeitado.
-- [ ] **TX-02** Uma transação externa registra: id interno, id externo, provedor, chave de idempotência, hash do payload, carteira, jogador, rodada, jogo, tipo, `Money`, referência externa opcional, estado e timestamps.
-- [ ] **TX-03** Quando aplicável, persiste também: a referência interna resolvida, o `failureCode` e o resultado financeiro devolvido ao provedor (saldo observado).
-- [ ] **TX-04** Uma transação `OPENING` registra identidade interna estável, carteira, jogador, moeda, valor, estado e timestamps. Os campos externos não se aplicam.
+- [~] **TX-01** Tipos `OPENING`, `BET`, `WIN`, `LOSS`, `REFUND` e `ROLLBACK`. `OPENING` recebido por HTTP ou SQS é rejeitado. *(M1, 29/09: `TestNewCommand` (`OPENING_NOT_ALLOWED`), `TestParseEnums`. Faltam as bordas HTTP/SQS (M3/M5).)*
+- [~] **TX-02** Uma transação externa registra: id interno, id externo, provedor, chave de idempotência, hash do payload, carteira, jogador, rodada, jogo, tipo, `Money`, referência externa opcional, estado e timestamps. *(M1, 29/09: `TestNewExternal`, `TestRehydrate`. Falta a persistência (M2).)*
+- [~] **TX-03** Quando aplicável, persiste também: a referência interna resolvida, o `failureCode` e o resultado financeiro devolvido ao provedor (saldo observado). *(M1, 29/09: `TestTransitionResults`, `TestRehydrate`. Falta a persistência (M2).)*
+- [~] **TX-04** Uma transação `OPENING` registra identidade interna estável, carteira, jogador, moeda, valor, estado e timestamps. Os campos externos não se aplicam. *(M1, 29/09: `TestNewOpening`, `TestOpening`. Falta a persistência (M2).)*
 - [ ] **TX-05** O schema distingue origem interna de externa (ex.: coluna `origin` + `CHECK`) e impede um crédito inicial duplicado (índice único parcial).
-- [ ] **TX-06** Máquina de estados validada pelo domínio: `PENDING`, `PENDING_REFERENCE`, `PROCESSED`, `REJECTED`, `FAILED`.
-- [ ] **TX-07** Estados terminais (`PROCESSED`, `REJECTED`, `FAILED`) não aceitam novas transições.
+- [x] **TX-06** Máquina de estados validada pelo domínio: `PENDING`, `PENDING_REFERENCE`, `PROCESSED`, `REJECTED`, `FAILED`. *(M1, 29/09: `TestTransactionStateMachine`.)*
+- [~] **TX-07** Estados terminais (`PROCESSED`, `REJECTED`, `FAILED`) não aceitam novas transições. *(M1, 29/09: `TestTransactionStateMachine` (terminais → `ErrInvalidTransition`). Falta o trigger `PDA02` (M2).)*
 - [ ] **TX-08** Um replay consulta o resultado persistido sem reaplicar a operação.
 - [ ] **TX-09** ⛔ Todo `PENDING` confirmado tem retomada durável por outra instância. Operações sem dependências podem ser concluídas de forma síncrona, sem commit intermediário de aceite.
-- [ ] **TX-10** A máquina de estados e a distinção entre falha transitória e permanente estão documentadas.
+- [x] **TX-10** A máquina de estados e a distinção entre falha transitória e permanente estão documentadas. *(M1, 29/09: `transaction-lifecycle.md` §1 e §8; `TestClassify`.)*
 
 ---
 
 ## 7. WalletLedgerEntry (§6.4)
 
-- [ ] **LED-01** Campos: `id`, `walletId`, `transactionId`, direção (`DEBIT`/`CREDIT`), valor, saldo anterior, saldo posterior e `createdAt`.
-- [ ] **LED-02** Um lançamento é imutável, e o construtor valida `balanceAfter = balanceBefore ± money`.
+- [x] **LED-01** Campos: `id`, `walletId`, `transactionId`, direção (`DEBIT`/`CREDIT`), valor, saldo anterior, saldo posterior e `createdAt`. *(M1, 29/09: `TestLedgerEntryInvariant`.)*
+- [x] **LED-02** Um lançamento é imutável, e o construtor valida `balanceAfter = balanceBefore ± money`. *(M1, 29/09: `TestLedgerEntryInvariant`.)*
 - [ ] **LED-03** ⛔ `UNIQUE (walletId, transactionId)` no banco.
 - [ ] **LED-04** ⛔ Append-only imposto pelo banco: trigger bloqueando `UPDATE`/`DELETE`/`TRUNCATE` e/ou `REVOKE` de privilégios.
 - [ ] **LED-05** `LOSS` e operações rejeitadas não produzem lançamento (garantido também por trigger no banco, [`data-model.md`](data-model.md) §4.2).
@@ -153,21 +153,21 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 8. Operações e referências (§7)
 
-- [ ] **OPS-01** `BET`: débito com valor `> 0` e saldo suficiente. Sem saldo, a operação é `REJECTED` com um código próprio.
-- [ ] **OPS-02** `WIN`: crédito com valor `> 0`. Pode referenciar uma aposta da mesma rodada.
-- [ ] **OPS-03** `LOSS`: exige `amount == "0.00"` e a moeda da carteira. Não cria ledger nem altera a versão. Emite `WagerTransactionProcessed` sem `WalletBalanceChanged`.
-- [ ] **OPS-04** `REFUND`: crédito que devolve integralmente o valor de uma `BET` processada.
-- [ ] **OPS-05** `ROLLBACK`: movimento contrário que desfaz integralmente uma `BET`, `WIN` ou `REFUND` processada.
-- [ ] **OPS-06** `referenceExternalTransactionId` é obrigatório em `REFUND`/`ROLLBACK` e é resolvido por `(providerId, referenceExternalTransactionId)`.
-- [ ] **OPS-07** A operação e sua referência concordam em provedor, jogador, carteira, moeda e rodada, e o valor é igual. Reversões parciais não são aceitas.
-- [ ] **OPS-08** ⛔ Uma referência não recebe duas reversões bem-sucedidas do mesmo tipo, com garantia no banco.
-- [ ] **OPS-09** A política para combinações de `REFUND` e `ROLLBACK` sobre a mesma aposta está documentada e impede a devolução duplicada do mesmo débito.
-- [ ] **OPS-10** Uma reversão que debitaria mais que o saldo disponível é `REJECTED`, auditável, com código **diferente** do usado para aposta sem saldo.
-- [ ] **OPS-11** Valor zero só é aceito no saldo inicial e em `LOSS`.
-- [ ] **OPS-12** Referência ainda ausente: a operação é persistida como `PENDING_REFERENCE` e um worker tenta de novo com backoff exponencial, inclusive após reinício (agenda persistida no banco).
-- [ ] **OPS-13** Há um máximo de tentativas ou TTL. Ao esgotar, a operação vira `REJECTED` com código de referência não encontrada e emite o evento de rejeição.
-- [ ] **OPS-14** Está documentado o comportamento quando a referência existe mas ainda está pendente, ou quando terminou sem sucesso.
-- [ ] **OPS-15** Toda rejeição tem um `failureCode` estável e documentado, que distingue entrada corrigível de resultado definitivo.
+- [x] **OPS-01** `BET`: débito com valor `> 0` e saldo suficiente. Sem saldo, a operação é `REJECTED` com um código próprio. *(M1, 29/09: `TestKindRules`.)*
+- [x] **OPS-02** `WIN`: crédito com valor `> 0`. Pode referenciar uma aposta da mesma rodada. *(M1, 29/09: `TestKindRules`.)*
+- [x] **OPS-03** `LOSS`: exige `amount == "0.00"` e a moeda da carteira. Não cria ledger nem altera a versão. Emite `WagerTransactionProcessed` sem `WalletBalanceChanged`. *(M1, 29/09: `TestKindRules`, `TestZeroAmountPolicy`.)*
+- [x] **OPS-04** `REFUND`: crédito que devolve integralmente o valor de uma `BET` processada. *(M1, 29/09: `TestKindRules`.)*
+- [x] **OPS-05** `ROLLBACK`: movimento contrário que desfaz integralmente uma `BET`, `WIN` ou `REFUND` processada. *(M1, 29/09: `TestKindRules`.)*
+- [x] **OPS-06** `referenceExternalTransactionId` é obrigatório em `REFUND`/`ROLLBACK` e é resolvido por `(providerId, referenceExternalTransactionId)`. *(M1, 29/09: `TestNewCommand` (`REFERENCE_REQUIRED`), `TestReferenceResolution`.)*
+- [x] **OPS-07** A operação e sua referência concordam em provedor, jogador, carteira, moeda e rodada, e o valor é igual. Reversões parciais não são aceitas. *(M1, 29/09: `TestReferenceResolution` (R5, R6), `TestSettleEvaluationOrder`.)*
+- [~] **OPS-08** ⛔ Uma referência não recebe duas reversões bem-sucedidas do mesmo tipo, com garantia no banco. *(M1, 29/09: `TestReferenceResolution` (R7). Falta o índice `wager_tx_single_reversal_uq` (M2).)*
+- [x] **OPS-09** A política para combinações de `REFUND` e `ROLLBACK` sobre a mesma aposta está documentada e impede a devolução duplicada do mesmo débito. *(M1, 29/09: `TestReferenceResolution` (R7, "ROLLBACK after a REFUND") + D-10.)*
+- [x] **OPS-10** Uma reversão que debitaria mais que o saldo disponível é `REJECTED`, auditável, com código **diferente** do usado para aposta sem saldo. *(M1, 29/09: `TestKindRules` (`REVERSAL_INSUFFICIENT_FUNDS`), `TestFailureCatalog`.)*
+- [x] **OPS-11** Valor zero só é aceito no saldo inicial e em `LOSS`. *(M1, 29/09: `TestZeroAmountPolicy`, `TestOpening`.)*
+- [~] **OPS-12** Referência ainda ausente: a operação é persistida como `PENDING_REFERENCE` e um worker tenta de novo com backoff exponencial, inclusive após reinício (agenda persistida no banco). *(M1, 29/09: `TestSettleUnresolvedReference`, `TestReferenceRetryPolicy`. Falta o worker (M6).)*
+- [~] **OPS-13** Há um máximo de tentativas ou TTL. Ao esgotar, a operação vira `REJECTED` com código de referência não encontrada e emite o evento de rejeição. *(M1, 29/09: `TestSettleUnresolvedReference`, `TestReferenceRetryPolicy`. Falta o worker (M6).)*
+- [x] **OPS-14** Está documentado o comportamento quando a referência existe mas ainda está pendente, ou quando terminou sem sucesso. *(M1, 29/09: `TestReferenceResolution` (R2, R3), `TestSettleUnresolvedReference`.)*
+- [x] **OPS-15** Toda rejeição tem um `failureCode` estável e documentado, que distingue entrada corrigível de resultado definitivo. *(M1, 29/09: `TestFailureCatalog`, `TestEvaluationOrder`, `TestSettleEvaluationOrder`.)*
 
 ---
 
@@ -175,11 +175,11 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 - [ ] **IDEM-01** ⛔ A idempotência é persistente e sobrevive ao reinício de todos os processos.
 - [ ] **IDEM-02** O header `Idempotency-Key` é obrigatório no HTTP. O servidor não substitui silenciosamente a chave recebida.
-- [ ] **IDEM-03** Hash determinístico dos campos de negócio em JSON canônico com chaves ordenadas. A chave e os metadados de transporte ficam fora do cálculo. Algoritmo, campos e normalizações estão documentados.
-- [ ] **IDEM-04** O hash é equivalente entre HTTP e SQS para a mesma operação.
-- [ ] **IDEM-05** Mesma chave e mesmo conteúdo: devolve o resultado persistido com `idempotentReplay: true`.
-- [ ] **IDEM-06** Mesma chave com conteúdo diferente: conflito.
-- [ ] **IDEM-07** ⛔ `(providerId, externalTransactionId)` não pode ser reaplicado usando outra chave.
+- [x] **IDEM-03** Hash determinístico dos campos de negócio em JSON canônico com chaves ordenadas. A chave e os metadados de transporte ficam fora do cálculo. Algoritmo, campos e normalizações estão documentados. *(M1, 29/09: `TestPayloadHashGolden` (SHA calculado com `shasum`).)*
+- [~] **IDEM-04** O hash é equivalente entre HTTP e SQS para a mesma operação. *(M1, 29/09: `TestPayloadHashHTTPEqualsSQS` sobre a entrada do domínio. Faltam o DTO e o envelope reais (M3/M5).)*
+- [x] **IDEM-05** Mesma chave e mesmo conteúdo: devolve o resultado persistido com `idempotentReplay: true`. *(M1, 29/09: `TestIdempotencyDecision`.)*
+- [x] **IDEM-06** Mesma chave com conteúdo diferente: conflito. *(M1, 29/09: `TestIdempotencyDecision`.)*
+- [~] **IDEM-07** ⛔ `(providerId, externalTransactionId)` não pode ser reaplicado usando outra chave. *(M1, 29/09: `TestIdempotencyDecision`. Falta o índice `wager_tx_external_id_uq` (M2).)*
 - [ ] **IDEM-08** O replay de uma operação concluída devolve o saldo observado no processamento original.
 
 ---
@@ -234,12 +234,12 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [ ] **OUT-05** Republicações preservam o `eventId`.
 - [ ] **OUT-06** Recuperação demonstrada em dois cenários: (a) interrupção entre o commit e a publicação; (b) interrupção entre a publicação e a confirmação na outbox. Os eventos pendentes são assumidos por outra instância.
 - [ ] **OUT-07** O destino dos eventos de saída está provisionado e os contratos de roteamento e consumo estão documentados.
-- [ ] **OUT-08** Tipos concretos para `WagerTransactionProcessed`, `WagerTransactionRejected`, `WalletBalanceChanged` e `WagerTransactionPendingReference`.
-- [ ] **OUT-09** Envelope com `eventId`, `eventType`, `aggregateId`, `correlationId`, `causationId` (opcional), `occurredAt`, `version` e `data` tipado. Tipo e versão são definidos pelo construtor do evento.
+- [x] **OUT-08** Tipos concretos para `WagerTransactionProcessed`, `WagerTransactionRejected`, `WalletBalanceChanged` e `WagerTransactionPendingReference`. *(M1, 29/09: `TestEventConstructors`, `TestSeal`, `TestEnvelopeJSON`.)*
+- [x] **OUT-09** Envelope com `eventId`, `eventType`, `aggregateId`, `correlationId`, `causationId` (opcional), `occurredAt`, `version` e `data` tipado. Tipo e versão são definidos pelo construtor do evento. *(M1, 29/09: `TestSeal`, `TestEnvelopeJSON`.)*
 - [ ] **OUT-10** ⛔ Nenhum evento é publicado antes do commit da transação que o originou.
-- [ ] **OUT-11** O payload de `WalletBalanceChanged` inclui `walletId`, `transactionId`, `direction`, `money`, `balanceBefore`, `balanceAfter` e `walletVersion`.
-- [ ] **OUT-12** Timestamps em UTC RFC 3339 e valores monetários como strings decimais.
-- [ ] **OUT-13** Eventos de origem interna (`OPENING`) não exigem os metadados externos inaplicáveis.
+- [x] **OUT-11** O payload de `WalletBalanceChanged` inclui `walletId`, `transactionId`, `direction`, `money`, `balanceBefore`, `balanceAfter` e `walletVersion`. *(M1, 29/09: `TestEnvelopeJSON`.)*
+- [x] **OUT-12** Timestamps em UTC RFC 3339 e valores monetários como strings decimais. *(M1, 29/09: `TestEnvelopeJSON`.)*
+- [x] **OUT-13** Eventos de origem interna (`OPENING`) não exigem os metadados externos inaplicáveis. *(M1, 29/09: `TestEnvelopeJSON`, `TestOpening`.)*
 
 ---
 
@@ -277,12 +277,12 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ### 17.1 Unitários
 
-- [ ] **TST-U01** `Money`: parsing, operações, escala, limites numéricos, entradas inválidas e incompatibilidade de moedas.
-- [ ] **TST-U02** Invariantes da carteira.
-- [ ] **TST-U03** Transições de estado da transação.
-- [ ] **TST-U04** Regras dos cinco tipos externos, incluindo a política de valor zero de cada um.
-- [ ] **TST-U05** Conflito de payload com a mesma chave (hash canônico).
-- [ ] **TST-U06** Abertura interna: metadados e eventos gerados.
+- [x] **TST-U01** `Money`: parsing, operações, escala, limites numéricos, entradas inválidas e incompatibilidade de moedas. *(M1, 29/09: `money_test.go`, `json_test.go`, `money_fuzz_test.go`, `nofloat_test.go`.)*
+- [x] **TST-U02** Invariantes da carteira. *(M1, 29/09: `wallet_test.go`, `ledger_entry_test.go`.)*
+- [x] **TST-U03** Transições de estado da transação. *(M1, 29/09: `TestTransactionStateMachine`.)*
+- [x] **TST-U04** Regras dos cinco tipos externos, incluindo a política de valor zero de cada um. *(M1, 29/09: `TestKindRules`, `TestZeroAmountPolicy`, `TestReferenceResolution`, `TestEvaluationOrder`.)*
+- [x] **TST-U05** Conflito de payload com a mesma chave (hash canônico). *(M1, 29/09: `TestPayloadHashGolden`, `TestIdempotencyDecision`.)*
+- [x] **TST-U06** Abertura interna: metadados e eventos gerados. *(M1, 29/09: `TestOpening`.)*
 
 ### 17.2 Integração (containers reais: PostgreSQL, IdP e LocalStack/MiniStack)
 

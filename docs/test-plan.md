@@ -147,7 +147,7 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | U04c | `TestReferenceResolution`: R1 a R8, com os códigos esperados | OPS-06..10, OPS-14 |
 | U04d | `TestEvaluationOrder`: uma entrada com várias violações devolve sempre o primeiro código da ordem §3 | OPS-15 |
 | U05a | `TestPayloadHashGolden`: vetores fixos → SHA-256 esperado. Mudanças de campo alteram o hash; chave, `messageId`, `occurredAt` e `received_via` não alteram | TST-U05, IDEM-03 |
-| U05b | `TestPayloadHashHTTPEqualsSQS`: o mesmo negócio pelo corpo HTTP e pelo `data` SQS gera o mesmo hash | IDEM-04 |
+| U05b | `TestPayloadHashHTTPEqualsSQS`: o mesmo negócio pelo corpo HTTP e pelo `data` SQS gera o mesmo hash. No M1, sobre a entrada do domínio (chave e caixa dos UUIDs diferentes); o M3 e o M5 estendem com o DTO e o envelope reais | IDEM-04 |
 | U05c | `TestIdempotencyDecision`: mesma chave e mesmo hash → replay; hash diferente → conflito; mesmo `externalId` com outra chave → conflito | TST-U05, IDEM-05..07 |
 | U06 | `TestOpening`: saldo maior que zero gera OPENING `PROCESSED`, 1 crédito e os 2 eventos sem metadados externos; saldo zero não gera transação, ledger nem eventos | TST-U06, HTTP-01, OUT-13 |
 | U07 | `TestLedgerEntryInvariant`: o construtor rejeita `after ≠ before ± amount` | LED-02 |
@@ -155,7 +155,7 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | U09a | `TestClassify`: `apperrors.Classify` reconhece cada `Kind` através de cadeias de `%w` | TX-10, DOM-04 |
 | U09b | `TestPostgresErrorMapping` (pacote `postgres`, sem banco): SQLSTATEs `08*`, `40001`, `40P01`, `55P03`, `57P01`, `53300` → transitório; `23505` por constraint → conflito de idempotência ou permanente; `PDA01`–`PDA05` e `22003` → permanente | TX-10 |
 | U10 | `TestDomainHasNoInfraImports`: `go list -deps ./internal/domain/...` não contém `fx`, `net/http`, `aws` nem `pgx` | DOM-07 |
-| U11 | `TestZeroValuesRejected`: `Money{}`, `Currency("")`, `Kind("")`, `Status("")`, `Wallet{}`, `WagerTransaction{}` e `LedgerEntry{}` são rejeitados pelas operações públicas | DOM-03 |
+| U11 | `TestZeroValuesRejected`: `Money{}`, `Currency("")`, `Kind("")`, `Status("")`, `Wallet{}`, `WagerTransaction{}` e `LedgerEntry{}` são rejeitados pelas operações públicas. Um teste por pacote (`money`, `wallet`, `wagering`) | DOM-03 |
 | U12 | `TestReferenceRetryPolicy`: sequência de atrasos (1, 2, 4, … s, com teto de 60 s), jitter dentro de ±20% e expiração por tentativas e por TTL, inclusive quando o TTL já venceu na primeira tentativa | OPS-12, OPS-13 |
 
 ### 5.2 Integração (TST-I)

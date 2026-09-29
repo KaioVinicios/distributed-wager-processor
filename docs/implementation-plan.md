@@ -54,9 +54,9 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 - `events`: envelope + 4 construtores (U08).
 - `apperrors` (`Kind` e `Classify`, U09a), o teste de imports do domínio (U10), a rejeição de zero values (U11) e a política de retentativa de referências (U12).
 
-**Pronto quando:** toda a tabela §5.1 do test-plan está verde com `-race`.
+**Pronto quando:** toda a tabela §5.1 do test-plan está verde com `-race`, exceto o U09b, que é do pacote `postgres` (M2).
 
-**Cobre:** MON-*, DOM-*, WAL-01..07, TX-01..08, LED-01..02, OPS-01..11, OPS-15, IDEM-03..06, OUT-08..13. **Eliminatório: E3.**
+**Cobre:** MON-*, DOM-*, WAL-01..07, TX-01..08, LED-01..02, OPS-01..11, OPS-15, IDEM-03..06, OUT-08, OUT-09, OUT-11..13 (vários parciais, completados no banco ou nas bordas; ver a spec). **Eliminatório: E3.** Spec: [`dev/specs/2026-09-29-m1-domain-design.md`](dev/specs/2026-09-29-m1-domain-design.md).
 
 #### M2 — Persistência (~3 h)
 

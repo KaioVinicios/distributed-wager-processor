@@ -36,7 +36,9 @@ stateDiagram-v2
 - Toda transição inválida devolve `ErrInvalidTransition`, verificável com `errors.Is`, e nunca causa `panic`.
 - `Rehydrate(snapshot)` reconstrói a transação no estado persistido **sem** passar por transições e **sem** gerar eventos.
 - `OPENING` tem um construtor próprio, `NewOpening(id, walletID, playerID, money, now)`. Como toda transação, ela nasce em `PENDING` e é concluída por `Process` na mesma transação SQL da abertura. Não existe atalho que pule a máquina de estados.
-- Os eventos são **retornados** pelos métodos de transição (ex.: `Process` devolve `[]Event`). O caso de uso grava esses eventos na outbox, e a entidade não tem acesso à outbox.
+- Os eventos são **retornados** pelos métodos de transição como `[]events.Event` (dados tipados, sem `eventId` nem metadados de transporte). O caso de uso monta o envelope (`events.Seal`) e grava na outbox, e a entidade não tem acesso à outbox.
+- Cada transição valida os próprios argumentos (ex.: `Process` exige o lançamento coerente com o tipo), então chamá-la diretamente não quebra invariantes.
+- A orquestração das §3.4, §4 e §7 fica em funções puras do domínio: `wagering.Settle` (HTTP, SQS e worker) e `wagering.OpenWallet` (abertura). Elas movimentam a carteira só pelo agregado (`Debit`/`Credit`) e devolvem o lançamento e os eventos; o caso de uso só faz I/O.
 
 ---
 
@@ -78,7 +80,7 @@ A ordem é fixa, para que o `failureCode` seja **determinístico**: a mesma entr
 ### 3.1 Sem estado (antes de qualquer I/O de domínio; resulta em 400 e não é persistido)
 
 1. JSON bem formado, sem campos desconhecidos (`DisallowUnknownFields`) e corpo de até 64 KB.
-2. `Idempotency-Key` presente, com 1 a 255 caracteres imprimíveis (só HTTP; no SQS, é `data.idempotencyKey`).
+2. `Idempotency-Key` presente, com 1 a 255 caracteres ASCII visíveis, `^[\x21-\x7E]{1,255}$` (só HTTP; no SQS, é `data.idempotencyKey`).
 3. Campos obrigatórios presentes; `playerId` e `walletId` são UUIDs válidos; `providerId`, `externalTransactionId`, `roundId` e `gameId` têm de 1 a 128 caracteres.
 4. `kind` válido, e `OPENING` é rejeitado.
 5. `money`: formato estrito (D-03) e moeda suportada.
@@ -332,7 +334,7 @@ Os contratos dos eventos (envelope, payloads e roteamento) ficam em `messaging.m
 
 `context.Canceled` durante o shutdown **não** é tratado como falha: a transação é desfeita e a mensagem tem a visibilidade liberada (D-12).
 
-A classificação fica em um único ponto, `apperrors.Classify(err)`, e é testada com os SQLSTATEs reais nos testes de integração.
+A classificação fica em um único ponto, `apperrors.Classify(err)`, e é testada com os SQLSTATEs reais nos testes de integração. Um erro que nenhuma camada classificou é tratado como **transitório** (D-05).
 
 ---
 

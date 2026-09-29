@@ -63,6 +63,7 @@ flowchart LR
 - **Sinal:** valores negativos existem só em cálculos internos (`difference` da reconciliação, `Negate`). O saldo nunca fica negativo (§4).
 - **Moedas:** toda operação ou comparação exige a mesma moeda. O contrário gera `ErrCurrencyMismatch`, verificável com `errors.Is`.
 - **Serialização:** sempre `{"amount":"25.00","currency":"BRL"}`, com marshal e unmarshal próprios. Valores negativos só aparecem em respostas (ex.: `difference` = `"-5.00"`); na entrada, são rejeitados.
+- **Zero value e JSON:** `Money{}` é rejeitado por toda operação que devolve erro, inclusive o marshal. O tipo não tem `IsZero()`, para que o `omitzero` do `encoding/json` não omita um `"0.00"` legítimo. O unmarshal recusa campo desconhecido, campo ausente, `null` e `amount` numérico.
 - **Persistência:** colunas `*_minor BIGINT` + `currency CHAR(3)`. As somas no banco (reconciliação) retornam `numeric` e são convertidas para `int64` com verificação de overflow.
 - **Garantia contra float:** o linter `forbidigo` proíbe `float32`/`float64` e `strconv.ParseFloat` fora do pacote de observabilidade, e um teste que analisa a AST do pacote `money` falha se encontrar ponto flutuante.
 
@@ -150,7 +151,8 @@ Detalhes: [`docs/decisions.md`](docs/decisions.md) D-09.
 
 - **Processamento síncrono:** o desafio permite concluir operações sem dependências "de forma síncrona, sem commit intermediário de aceite". Por isso `PENDING` nunca é persistido: o `CHECK` do status o exclui. Assim, "todo `PENDING` confirmado tem retomada durável" vale por construção. O único estado de espera persistido é `PENDING_REFERENCE`, que o worker retoma a partir de qualquer instância (§7).
 - **Transições:** as transições são validadas no domínio (`ErrInvalidTransition`) e, para estados terminais, também no banco (trigger). A reidratação reconstrói o estado sem passar por transições e sem gerar eventos.
-- **Classificação de falhas:** fica em um único ponto (`apperrors.Classify`), alimentado pelos adaptadores.
+- **Orquestração no domínio:** `wagering.Settle` avalia as regras com estado e a referência, movimenta a carteira pelo agregado (`Debit`/`Credit`) e devolve o lançamento e os eventos; `wagering.OpenWallet` faz o mesmo para a abertura. HTTP, SQS e o worker de referências chamam a mesma função, e o caso de uso só faz I/O. Cada transição valida os próprios argumentos, então nenhuma chamada direta quebra as invariantes.
+- **Classificação de falhas:** fica em um único ponto (`apperrors.Classify`), alimentado pelos adaptadores. Um erro que nenhuma camada classificou é tratado como transitório: nada é persistido e a operação pode ser reenviada depois da correção, em vez de virar um `FAILED` definitivo (D-05).
 
 | Classe | Exemplos | Efeito |
 | --- | --- | --- |
@@ -176,7 +178,7 @@ Detalhes: [`docs/transaction-lifecycle.md`](docs/transaction-lifecycle.md) §1 e
 - **Hash do payload:** SHA-256 em hex sobre **JSON canônico**, com chaves em ordem lexicográfica e sem espaços.
   - **Campos:** `providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`, `kind`, `money.amount`, `money.currency` e `referenceExternalTransactionId` (omitido quando ausente).
   - **Excluídos:** a chave de idempotência, `messageId`, `type`, `occurredAt`, headers e o canal de entrada.
-  - **Única normalização:** os UUIDs são convertidos para a forma canônica em minúsculas.
+  - **Única normalização:** os UUIDs são convertidos para a forma canônica em minúsculas. A `Idempotency-Key` aceita de 1 a 255 caracteres ASCII visíveis e nunca é alterada.
 - **HTTP ≡ SQS:** o hash é calculado a partir do comando de domínio já validado, que é o mesmo nos dois canais. A mesma operação enviada por HTTP e por SQS é reconhecida como replay, e isso é coberto por testes que cruzam os canais.
 - **Segunda camada no SQS:** a inbox deduplica por `(consumerName, messageId)` na mesma transação do tratamento (§9).
 
@@ -426,6 +428,8 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 14. **A reconciliação sempre responde 200.** A divergência é sinalizada por `consistent: false`, log e métrica.
 15. **`FAILED` só para falha permanente fora das regras de negócio**, registrada em uma transação separada, sem efeito financeiro. No SQS, a mensagem correspondente também vai para a DLQ, que o desafio exige para erros permanentes.
 16. **Mensagens SQS não carregam token.** A autorização do canal é do broker (§10.3).
+17. **"Caracteres imprimíveis" da `Idempotency-Key`** foi lido como ASCII visível (`0x21`–`0x7E`): sem espaço e sem caracteres não ASCII.
+18. **Erro não classificado é transitório** (D-05). Diante de um erro desconhecido, responder 503 e permitir o reenvio é preferível a gravar um `FAILED` definitivo, que consumiria o `externalTransactionId`.
 
 ---
 
@@ -454,7 +458,7 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 
 ## 17. Trabalho não concluído
 
-*Preenchido na entrega.* Estado em 29/09/2026: **M0 concluído**, com esqueleto Fx, health, métricas, compose com 3 réplicas, Keycloak provisionado, MiniStack com IAM aplicado e tooling de qualidade. As regras de negócio começam no M1. Os diferenciais opcionais (tracing com OpenTelemetry, dashboards, teste de carga e ledger de partidas dobradas) só serão feitos se houver folga ([`docs/implementation-plan.md`](docs/implementation-plan.md) M12).
+*Preenchido na entrega.* Estado em 29/09/2026: **M0 e M1 concluídos**. O M0 entregou o esqueleto Fx, health, métricas, compose com 3 réplicas, Keycloak provisionado, MiniStack com IAM aplicado e tooling de qualidade. O M1 entregou o domínio (Money, carteira e ledger, máquina de estados, regras por tipo, referências, hash e idempotência, eventos) e o vocabulário de erros, com a tabela U do test-plan verde. A persistência começa no M2. Os diferenciais opcionais (tracing com OpenTelemetry, dashboards, teste de carga e ledger de partidas dobradas) só serão feitos se houver folga ([`docs/implementation-plan.md`](docs/implementation-plan.md) M12).
 
 ---
 

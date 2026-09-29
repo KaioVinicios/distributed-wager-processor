@@ -275,7 +275,7 @@ O algoritmo de claim, publicação e confirmação está em [`data-model.md`](da
 
 | Campo | Regra |
 | --- | --- |
-| `eventId` | UUIDv7, gerado **no construtor do evento**, antes do `INSERT` na outbox. É estável em todas as republicações |
+| `eventId` | UUIDv7, atribuído **ao selar o envelope** (`events.Seal`), antes do `INSERT` na outbox. É estável em todas as republicações |
 | `eventType` / `version` | Definidos pelo construtor tipado de cada evento (`NewWalletBalanceChanged(...)`). Não é possível criar um evento com tipo ou versão arbitrários |
 | `aggregateType` / `aggregateId` | `Wallet` + `walletId` para `WalletBalanceChanged`, e `WagerTransaction` + `transactionId` para os demais |
 | `correlationId` | Vem da origem: HTTP `X-Correlation-Id` (ou gerado); SQS: atributo `correlationId` ou `messageId`. Fica gravado na transação, e o worker de referências reutiliza o valor original |

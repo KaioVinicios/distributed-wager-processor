@@ -139,7 +139,8 @@ As versões fixadas, as imagens, as ferramentas de lint e formatação e a confo
 - **Falha transitória:** o erro é devolvido ao chamador e nada é persistido. O HTTP responde 503 e o SQS faz retry. A classificação é feita por:
   - erros de conexão e rede;
   - `context.DeadlineExceeded`;
-  - SQLSTATE `40001` (serialization failure), `40P01` (deadlock), `55P03` (lock timeout), `57P01` (admin shutdown), `53300` (too many connections), além da classe `08*` (connection exception).
+  - SQLSTATE `40001` (serialization failure), `40P01` (deadlock), `55P03` (lock timeout), `57P01` (admin shutdown), `53300` (too many connections), além da classe `08*` (connection exception);
+  - **qualquer erro que nenhuma camada classificou** (decisão do autor em 29/09/2026, spec do M1). Um bug desconhecido não consome o `externalTransactionId` com um `FAILED` definitivo: o HTTP responde 503 e o SQS chega à DLQ pela redrive. Os adaptadores classificam explicitamente tudo o que é conhecido.
 - **Falha permanente (`FAILED`):** erro que não é de negócio e não se resolve com retry, por exemplo um dado persistido corrompido que não pode ser reidratado, ou uma violação de constraint que o domínio não previu. Fica registrado para auditoria em uma transação separada, com `failureCode = INTERNAL_PERMANENT_FAILURE` e sem efeito financeiro. No HTTP, a resposta é 500. No SQS, essa mesma transação grava a inbox (`outcome = FAILED`), e a mensagem é enviada à DLQ, porque o desafio exige que erros permanentes cheguem à DLQ (§10).
 
 ---
@@ -238,6 +239,8 @@ Um segundo realm, `other`, com um client de teste, fornece tokens com `iss` e ch
 - **Campos incluídos:** `providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`, `kind`, `money.amount`, `money.currency` e `referenceExternalTransactionId`. Este último é **omitido** quando ausente, sem serializar `null`.
 - **Excluídos:** `Idempotency-Key`/`idempotencyKey`, `messageId`, `type`, `occurredAt`, headers e qualquer metadado de transporte.
 - **Normalização:** os UUIDs são convertidos para a forma canônica em minúsculas. `amount` não é normalizado porque o formato já é estrito (D-03).
+- **Chave de idempotência:** de 1 a 255 caracteres ASCII visíveis (`^[\x21-\x7E]{1,255}$`), sem espaço nem caractere não ASCII. A chave recebida nunca é alterada.
+- **IDs no domínio:** como o domínio usa só a stdlib, os UUIDs circulam como `string` canônica em minúsculas, validada pelo pacote `internal/domain/ident`. O `app` gera os UUIDv7 com `google/uuid`.
 - O hash é calculado a partir do comando de domínio já validado, que é o mesmo para HTTP e SQS. Assim os dois canais produzem hashes iguais, e há um teste cruzado que garante isso.
 
 **Replay:** a transação guarda `result_balance_minor`, que é o saldo observado no processamento original, e o replay devolve esse valor em vez do saldo atual.
@@ -341,7 +344,7 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
   - A entrega é at-least-once e o `eventId` é preservado nas republicações.
   - Os consumidores devem deduplicar por `eventId` e ordenar por `walletVersion`.
   - Com vários publishers, a ordem estrita por carteira não é garantida, e essa limitação fica documentada.
-- **Envelope:** `eventId`, `eventType`, `aggregateId`, `correlationId`, `causationId?`, `occurredAt` (RFC 3339 UTC) e `version` (int), além de `data` tipado. Cada evento tem seu próprio struct e construtor, que define tipo e versão.
+- **Envelope:** `eventId`, `eventType`, `aggregateId`, `correlationId`, `causationId?`, `occurredAt` (RFC 3339 UTC) e `version` (int), além de `data` tipado. Cada evento tem seu próprio struct e construtor; tipo e versão são métodos do tipo Go, e a interface `events.Event` é selada, então não há como criar um evento com tipo ou versão arbitrários. O domínio devolve os eventos tipados, e o `app` monta o envelope com `events.Seal(eventId, correlationId, causationId, evento)`, atribuindo o `eventId` antes do `INSERT` na outbox.
 
 ---
 

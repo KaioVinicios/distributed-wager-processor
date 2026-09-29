@@ -35,9 +35,14 @@ pda/
 │   │   ├── module.go                       # fx.Module("config")
 │   │   └── config_test.go
 │   │
-│   ├── domain/                             # SEM fx, net/http, aws, pgx, database/sql (DOM-07)
+│   ├── domain/                             # SEM fx, net/http, aws, pgx, database/sql (DOM-07); só stdlib
+│   │   ├── doc.go                          # package domain: documentação do domínio
+│   │   ├── imports_test.go                 # U10: go list -deps sem fx, net/http, aws, pgx
+│   │   ├── ident/
+│   │   │   ├── ident.go                    # Parse/Valid: UUID canônico em minúsculas (IDs do domínio são string)
+│   │   │   └── ident_test.go
 │   │   ├── money/
-│   │   │   ├── money.go                    # Money (int64 minor units + Currency), Parse, Zero, Add, Sub, Negate, Cmp
+│   │   │   ├── money.go                    # Money (int64 minor units + Currency), Parse, FromMinor, Zero, Add, Sub, Negate, Cmp
 │   │   │   ├── currency.go                 # Currency ISO 4217 suportadas (BRL, USD, EUR)
 │   │   │   ├── json.go                     # MarshalJSON / UnmarshalJSON ({"amount","currency"})
 │   │   │   ├── errors.go                   # ErrInvalidAmount, ErrOverflow, ErrCurrencyMismatch...
@@ -45,27 +50,31 @@ pda/
 │   │   │   ├── money_fuzz_test.go          # U01f
 │   │   │   └── nofloat_test.go             # U01g: varre a AST do pacote em busca de float
 │   │   ├── wallet/
-│   │   │   ├── wallet.go                   # agregado: New, Rehydrate, Debit, Credit (versão)
+│   │   │   ├── wallet.go                   # agregado: Open, Rehydrate, Debit, Credit, OpeningEntry (versão)
 │   │   │   ├── ledger_entry.go             # LedgerEntry imutável + Direction
 │   │   │   ├── errors.go                   # ErrInsufficientFunds...
-│   │   │   └── *_test.go                   # U02, U07
+│   │   │   └── *_test.go                   # U02, U07, U11
 │   │   ├── wagering/
-│   │   │   ├── transaction.go              # WagerTransaction: NewExternal, NewOpening, Rehydrate, getters
+│   │   │   ├── transaction.go              # WagerTransaction: NewExternal, NewOpening, Rehydrate, Snapshot, getters
 │   │   │   ├── transitions.go              # Process, Reject, AwaitReference, RescheduleReference, Fail
 │   │   │   ├── kind.go                     # Kind + movimento por tipo
 │   │   │   ├── status.go                   # Status + terminalidade
-│   │   │   ├── origin.go                   # INTERNAL | EXTERNAL
-│   │   │   ├── command.go                  # Command: entrada de negócio (HTTP e SQS convergem aqui)
-│   │   │   ├── validation.go               # validação sem estado (lifecycle §3.1)
-│   │   │   ├── rules.go                    # regras com estado e decisão do movimento (§3.4)
-│   │   │   ├── reference.go                # resolução R1–R8 (§4)
+│   │   │   ├── origin.go                   # INTERNAL | EXTERNAL e ReceivedVia (HTTP | SQS)
+│   │   │   ├── command.go                  # Input cru → Command: validação sem estado (lifecycle §3.1)
+│   │   │   ├── payload_hash.go             # JSON canônico + SHA-256 (D-08)
+│   │   │   ├── idempotency.go              # CheckIdempotency: replay ou conflito (D-08)
+│   │   │   ├── rules.go                    # movimento por tipo e regras R3–R6 da referência
+│   │   │   ├── settle.go                   # Settle: §3.4 + R1–R8 + movimento + eventos (HTTP, SQS e worker)
+│   │   │   ├── opening.go                  # OpenWallet: carteira + OPENING + lançamento + eventos
 │   │   │   ├── retry_policy.go             # ReferenceRetryPolicy: backoff, jitter, TTL, max tentativas
 │   │   │   ├── failure.go                  # FailureCode + FailureCategory (catálogo §5)
-│   │   │   ├── payload_hash.go             # JSON canônico + SHA-256 (D-08)
-│   │   │   ├── errors.go                   # ErrInvalidTransition, ValidationError...
-│   │   │   └── *_test.go                   # U03, U04a–d, U05a–c, U11, U12
+│   │   │   ├── codes.go                    # InputCode (400/409 nascidos no domínio)
+│   │   │   ├── errors.go                   # ErrInvalidTransition, ValidationError, ConflictError...
+│   │   │   └── *_test.go                   # U03, U04a–d, U05a–c, U06, U11, U12
 │   │   └── events/
-│   │       ├── envelope.go                 # Envelope, Type, Version, formatação de tempo
+│   │       ├── event.go                    # interface Event selada, Type, AggregateType
+│   │       ├── envelope.go                 # Envelope + Seal (eventId, correlationId, causationId) + MarshalJSON
+│   │       ├── time.go                     # Time: RFC 3339 UTC com 3 casas
 │   │       ├── wallet_balance_changed.go
 │   │       ├── wager_transaction_processed.go
 │   │       ├── wager_transaction_rejected.go
@@ -260,7 +269,7 @@ flowchart TD
 
 | Pacote | Pode importar | **Não** pode importar | Verificação |
 | --- | --- | --- | --- |
-| `domain/*` | stdlib e outros pacotes `domain/*` (`wagering` → `money`, `wallet`; `events` → `money`) | `fx`, `net/http`, `aws`, `pgx`, `database/sql`, `app`, `adapters`, `apperrors` | `depguard` + teste U10 |
+| `domain/*` | stdlib e outros pacotes `domain/*` (`wallet` → `money`, `ident`; `events` → `money`, `ident`; `wagering` → `money`, `wallet`, `events`, `ident`) | `fx`, `net/http`, `aws`, `pgx`, `database/sql`, `app`, `adapters`, `apperrors` | `depguard` + teste U10 |
 | `apperrors` | stdlib | Qualquer pacote interno | `depguard` |
 | `app` | `domain/*`, `apperrors`, stdlib | `fx`, `net/http`, `aws`, `pgx`, `adapters/*`, `auth` | `depguard` |
 | `auth` | `apperrors`, `config`, `go-oidc`, stdlib | `app`, `adapters/*`, `domain/*` | `depguard` |
