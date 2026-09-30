@@ -633,9 +633,19 @@ FROM outbox_events WHERE published_at IS NULL;
 ```
 
 **Claim de referências pendentes (D-11):** a busca por `status = 'PENDING_REFERENCE' AND next_attempt_at <= now()` usa `FOR UPDATE SKIP LOCKED LIMIT $1`. Cada linha é processada na sua própria transação, que também trava a carteira. Para evitar deadlock com o caminho HTTP, que trava primeiro a carteira e depois a transação, o worker:
-1. apenas **seleciona os IDs** com `SKIP LOCKED` e sai da transação;
+1. apenas **seleciona os IDs** (com o `wallet_id`) com `SKIP LOCKED`, em **um único statement no pool**, e não mantém transação aberta. O instante `$now` é o do `Clock`, o mesmo que a antecipação grava;
 2. em uma nova transação por item, trava **primeiro a carteira** e depois a linha da transação com `FOR UPDATE`;
-3. rechecagem: se o status já não for `PENDING_REFERENCE`, ignora o item.
+3. rechecagem sob os dois locks: se o status já não for `PENDING_REFERENCE` **ou** o `next_attempt_at` estiver no futuro (outra instância reagendou o item depois do claim), ignora o item, sem contar tentativa.
+
+```sql
+SELECT id, wallet_id FROM wager_transactions
+WHERE status = 'PENDING_REFERENCE' AND next_attempt_at <= $1
+ORDER BY next_attempt_at
+FOR UPDATE SKIP LOCKED
+LIMIT $2;   -- usa wager_tx_pending_due_idx
+```
+
+O gauge `reference_pending_transactions` vem de `SELECT count(*) FROM wager_transactions WHERE status = 'PENDING_REFERENCE'`, com o mesmo índice parcial.
 
 **Antecipação das pendências** (na transação que leva uma operação a estado terminal: `PROCESSED`, `REJECTED` ou `FAILED`):
 ```sql

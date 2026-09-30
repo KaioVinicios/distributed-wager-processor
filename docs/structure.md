@@ -95,7 +95,7 @@ pda/
 │   │   ├── open_wallet.go
 │   │   ├── process_wager.go                # caso de uso único para HTTP, SQS e worker (lifecycle §6)
 │   │   ├── consume_wager.go                # inbox → validação → ProcessWager, com a inbox na mesma UoW (M5)
-│   │   ├── resolve_references.go           # passo do worker (claim → reavaliação)
+│   │   ├── resolve_references.go           # Claim, Resolve (locks carteira → transação, recheck, settleAndPersist com insert=false) e FAILED em UoW separada
 │   │   ├── queries.go                      # GetWallet, ListLedger, GetTransaction, GetByExternalID
 │   │   ├── reconcile.go
 │   │   ├── cursor.go                       # cursor opaco do ledger (base64url)
@@ -160,7 +160,8 @@ pda/
 │   │   │   ├── module.go                   # identidade da instância + lifecycle do loop
 │   │   │   └── *_test.go / *_integration_test.go
 │   │   └── references/
-│   │       ├── worker.go                   # loop de claim + app.ResolveReferences
+│   │       ├── worker.go                   # loop de claim + app.ResolveReferences; portas Resolver e Metrics
+│   │       ├── backoff.go                  # backoff do claim com o banco fora (1 s a 30 s)
 │   │       ├── module.go
 │   │       └── *_integration_test.go
 │   │
@@ -206,7 +207,7 @@ pda/
 ├── test/
 │   ├── testkit/                            # utilitários compartilhados (sem build tag)
 │   │   ├── env.go                          # NewEnv: banco isolado por pacote (M2); NewTestEnv: banco de um teste só (M4)
-│   │   ├── app.go                          # StartApp: Fx em processo com filas e tópico isolados, logs capturados, cliente por identidade e Audit
+│   │   ├── app.go                          # StartApp(ctx, opts...): Fx em processo com filas e tópico isolados, logs capturados, cliente por identidade e Audit; as opções ajustam a config antes do start
 │   │   ├── root.go                         # RepoRoot: raiz do módulo (go.mod)
 │   │   ├── dotenv.go                       # lê .env.example (+ .env) para os testes
 │   │   ├── awscreds.go                     # lê .local/aws/credentials (profiles IAM do aws-init)

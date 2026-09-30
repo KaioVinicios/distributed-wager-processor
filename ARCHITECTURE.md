@@ -195,7 +195,9 @@ Detalhes: [`docs/decisions.md`](docs/decisions.md) D-08.
 ## 7. Referências pendentes
 
 - **Quando:** um `REFUND` ou `ROLLBACK` (ou um `WIN` que informa referência) chega antes da transação referenciada, ou a referência ainda está em `PENDING_REFERENCE`. A operação é persistida como `PENDING_REFERENCE` e o evento `WagerTransactionPendingReference` é emitido. O HTTP responde **202**, e no SQS a mensagem é concluída depois do commit da pendência.
-- **Worker:** qualquer instância busca as pendências vencidas com `FOR UPDATE SKIP LOCKED` e processa cada uma em sua própria transação, travando carteira → transação. A agenda (`attempts`, `next_attempt_at`, `expires_at`) fica toda no banco, então sobrevive a reinícios.
+- **Worker:** qualquer instância busca as pendências vencidas (um único statement com `FOR UPDATE SKIP LOCKED`, que devolve só `(id, walletId)` e não segura nada) e processa **um item por vez**, cada um em sua própria transação, travando carteira → transação (a ordem do HTTP). A agenda (`attempts`, `next_attempt_at`, `expires_at`) fica toda no banco, então sobrevive a reinícios.
+- **Recheck sob os locks:** o item só é reavaliado se ainda estiver em `PENDING_REFERENCE` **e** com `next_attempt_at <= now`. Duas instâncias podem pegar o mesmo ID no claim; a segunda encontra o item reagendado pela primeira e o ignora, sem contar uma tentativa a mais.
+- **Falhas do worker:** uma falha permanente grava `FAILED` numa transação separada (sem lançamento nem evento) e antecipa os dependentes, que saem com `REFERENCE_NOT_PROCESSED`. Uma falha transitória não muda nada: o item continua devido e volta no ciclo seguinte. Os eventos do worker citam, em `causationId`, a operação que destravou a pendência, e mantêm o `correlationId` original.
 - **Backoff exponencial:** `min(1 s × 2^tentativas, 60 s)` com ±20% de jitter.
 - **Limite:** 8 tentativas **ou** 10 minutos de TTL, o que vier primeiro. Com os padrões, as tentativas se esgotam em cerca de 3 min; o TTL limita a espera em tempo de relógio, inclusive com todas as instâncias paradas. Ao esgotar, a operação vira `REJECTED` com `REFERENCE_NOT_FOUND` e o evento `WagerTransactionRejected` é emitido. Tudo é configurável por ambiente.
 - **Referência existente mas pendente:** continua aguardando, e o tempo conta para o mesmo limite.
@@ -345,7 +347,7 @@ O Fx executa os `OnStart` na ordem de registro e os `OnStop` na ordem inversa. A
    - libera a visibilidade das mensagens recebidas e ainda não iniciadas;
    - espera as que estão em andamento até o prazo;
    - se o prazo vencer, cancela as restantes, faz rollback e libera a visibilidade para reentrega segura.
-3. **Publisher e worker de referências:** param de reservar trabalho e terminam o item atual. Um lease reservado e não publicado vence e é reassumido por outra instância.
+3. **Publisher e worker de referências:** param de reservar trabalho e terminam o item atual. Um lease reservado e não publicado vence e é reassumido por outra instância. O worker para depois do publisher: os eventos do último item dele ficam na outbox e são publicados por outra instância ou no próximo start.
 4. **Dependências:** o pool do PostgreSQL e os clientes AWS (conexões ociosas do cliente HTTP do SDK) são fechados **depois** que todos os componentes que os usam terminaram. O teste I07b verifica isso com `goleak`.
 
 **Encerramento abrupto (`SIGKILL`) é seguro por construção:** nada é removido do SQS sem commit, o lease da outbox expira e as pendências ficam agendadas no banco. Isso é demonstrado com pontos de falha injetados nos testes e2e.
@@ -371,7 +373,7 @@ As métricas Prometheus ficam em `/metrics`, em uma porta administrativa separad
 | `wager_processing_duration_seconds` | histogram | `channel`, `outcome` | Latência de processamento |
 | `wager_duplicates_total` | counter | `channel`, `layer` (`inbox`, `idempotency`) | Duplicatas |
 | `concurrency_conflicts_total` | counter | `reason` (`lock_timeout`, `unique_race`, `version_mismatch`) | Conflitos de concorrência |
-| `reference_pending_transactions` | gauge | — | Pendências abertas |
+| `reference_pending_transactions` | gauge | — | Pendências abertas (atualizado pelo worker no máximo 1×/s) |
 | `reference_retries_total` / `reference_expired_total` | counter | — | Retries e expirações de referência |
 | `sqs_messages_processed_total` | counter | `outcome` | Resultados no SQS |
 | `sqs_retries_total` | counter | `reason` | Retries |
@@ -474,13 +476,15 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 12. **Todos os papéis rodam em todas as instâncias** até o M7, quando entram as flags `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED` (D-15).
 13. **A espera por referências é finita.** Uma reversão cuja referência fique retida além do limite (por exemplo, numa indisponibilidade prolongada da fila) é rejeitada com `REFERENCE_NOT_FOUND`. O limite é configurável (`REFERENCE_MAX_ATTEMPTS`, `REFERENCE_TTL`).
 
+14. **Ciclo de lock entre carteiras diferentes que se referenciam.** A antecipação de dependentes atualiza linhas de pendências de outra carteira sem travá-la. Duas pendências que se referenciam de carteiras diferentes poderiam, em teoria, formar um ciclo entre o worker e uma requisição HTTP. Isso já vale para o caminho HTTP desde o M3, e o `lock_timeout` o transforma num erro transitório (503 ou nova tentativa do worker); a ordem carteira → transação dentro da mesma carteira é provada por `TestResolveReferencesLockOrder`.
+
 *Esta lista é revisada ao fim de cada marco e fechada na entrega.*
 
 ---
 
 ## 17. Trabalho não concluído
 
-*Preenchido na entrega.* Estado em 29/09/2026: **M0 a M5 concluídos**. O M0 entregou o esqueleto Fx, health, métricas, compose com 3 réplicas, Keycloak provisionado, MiniStack com IAM aplicado e tooling de qualidade. O M1 entregou o domínio (Money, carteira e ledger, máquina de estados, regras por tipo, referências, hash e idempotência, eventos) e o vocabulário de erros, com a tabela U do test-plan verde. O M2 entregou a persistência: migrations com todas as constraints, triggers e grants, o Unit of Work e os repositórios, provados contra o PostgreSQL real, inclusive todos os fluxos do domínio gravados de ponta a ponta. O M3 entregou o contrato (`api/openapi.yaml`), os casos de uso, a autenticação com o Keycloak real e as 9 rotas, com os testes de autenticação, isolamento, contrato e concorrência em processo. O M4 entregou o publisher da outbox (claim com lease, SNS FIFO, backoff, recuperação e stop gracioso), o contrato formal dos eventos (`api/events.yaml`) e a verificação de que todo evento é publicado e entregue. O M5 entregou o consumidor SQS (inbox na mesma transação, DLQ explícita e por redrive, backoff, pausa por saúde, liberação por prazo, shutdown em 5 passos) e a prova das políticas do broker. O worker de referências vem no M6. Os diferenciais opcionais (tracing com OpenTelemetry, dashboards, teste de carga e ledger de partidas dobradas) só serão feitos se houver folga ([`docs/implementation-plan.md`](docs/implementation-plan.md) M12).
+*Preenchido na entrega.* Estado em 30/09/2026: **M0 a M6 concluídos**. O M0 entregou o esqueleto Fx, health, métricas, compose com 3 réplicas, Keycloak provisionado, MiniStack com IAM aplicado e tooling de qualidade. O M1 entregou o domínio (Money, carteira e ledger, máquina de estados, regras por tipo, referências, hash e idempotência, eventos) e o vocabulário de erros, com a tabela U do test-plan verde. O M2 entregou a persistência: migrations com todas as constraints, triggers e grants, o Unit of Work e os repositórios, provados contra o PostgreSQL real, inclusive todos os fluxos do domínio gravados de ponta a ponta. O M3 entregou o contrato (`api/openapi.yaml`), os casos de uso, a autenticação com o Keycloak real e as 9 rotas, com os testes de autenticação, isolamento, contrato e concorrência em processo. O M4 entregou o publisher da outbox (claim com lease, SNS FIFO, backoff, recuperação e stop gracioso), o contrato formal dos eventos (`api/events.yaml`) e a verificação de que todo evento é publicado e entregue. O M5 entregou o consumidor SQS (inbox na mesma transação, DLQ explícita e por redrive, backoff, pausa por saúde, liberação por prazo, shutdown em 5 passos) e a prova das políticas do broker. O M6 entregou o worker de referências (claim sem lease, itens em sequência, recheck de status e horário, `FAILED` isolado, expiração por tentativas e por TTL, retomada por outra instância depois de reinício), provado com dois workers em processo, com dois apps sobre o mesmo banco e no compose com 3 réplicas. Os diferenciais opcionais (tracing com OpenTelemetry, dashboards, teste de carga e ledger de partidas dobradas) só serão feitos se houver folga ([`docs/implementation-plan.md`](docs/implementation-plan.md) M12).
 
 ---
 

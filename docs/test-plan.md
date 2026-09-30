@@ -90,6 +90,8 @@ O isolamento é por banco porque o ledger é append-only e bloqueia `TRUNCATE`. 
 | `OUTBOX_RETRY_BASE_DELAY` | 1 s | 100 ms | 200 ms |
 | `OUTBOX_RETRY_MAX_DELAY` | 5 min | 1 s | 2 s |
 | `REFERENCE_RETRY_BASE_DELAY` | 1 s | 100 ms | 200 ms |
+| `REFERENCE_POLL_INTERVAL` | 500 ms | 50 ms | 100 ms |
+| `REFERENCE_BATCH_SIZE` | 50 | 50 | 50 |
 | `REFERENCE_MAX_ATTEMPTS` | 8 | 3 | 3 |
 | `REFERENCE_TTL` | 10 min | 3 s | 5 s |
 | `SHUTDOWN_TIMEOUT` | 20 s | 5 s | 5 s |
@@ -194,7 +196,9 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | I05e | `TestEventContracts`: pela API, abertura, BET, WIN, LOSS, rejeição e REFUND pendente. Os 4 tipos de evento chegam à fila de auditoria e validam contra [`api/events.yaml`](../api/events.yaml) (campos, tipos, omissões), com `MessageGroupId`, `MessageDeduplicationId` e atributos corretos | OUT-07..13 |
 | I05f | `TestPublisherSurvivesClaimFailures` e `TestOutboxBacklogGauges`: com o banco fora, o publisher espera 1 s, 2 s… e volta a publicar; com o broker fora, `outbox_pending_events` mostra o pendente e volta a zero depois da publicação | OUT-04, OBS-03 |
 | I05g | `TestPublisherStop`: no stop, a publicação em andamento termina e é confirmada, nenhuma outra começa, e o resto do lote fica com o lease; `goleak` limpo | FX-03, OUT-06 |
-| I06 | `TestRecoveryAfterRestart`: app 1 cria uma pendência de referência e para. App 2 sobe com o mesmo banco, a pendência é resolvida e os replays devolvem o resultado original | TST-I06, IDEM-01, OPS-12 |
+| I06 | `TestRecoveryAfterRestart`: app 1 (TTL longo, pela opção do `StartApp`) cria uma pendência de referência (REFUND antes da BET) e para. App 2 sobe com o mesmo banco, recebe a BET, a pendência é resolvida pelo worker e os replays devolvem o resultado gravado | TST-I06, IDEM-01, OPS-12 |
+| I06b | `TestPendingExpiresAfterDowntime`: app 1 cria uma pendência com TTL curto e para. App 2 sobe depois do TTL e a rejeita com `REFERENCE_NOT_FOUND`: o TTL vale sem worker ativo | OPS-13 |
+| I06c | M6, worker de referências: `TestResolveReferences` (retomada, reagendamento, expiração, R2–R7, cadeia em cascata, `causationId`), `TestResolveReferencesSkips` e `TestResolveReferencesConcurrent` (recheck de status e horário), `TestResolveReferencesFailures` (`FAILED`, transitório, contexto cancelado), `TestWorkerRepeatsFullCleanBatch`, `TestWorkerWaitsBetweenBatches`, `TestWorkerClaimBackoff`, `TestWorkerMetrics`, `TestWorkerStop`, `TestResolveReferencesLockOrder` (a ordem carteira → transação, determinístico), `TestConcurrentWorkers` (2 workers, 40 pendências) e `TestWorkerVersusHTTP` (a mistura com o HTTP; teste de fumaça, não a prova da ordem dos locks) e o `TestTransactionRepository` com `ClaimDue`, `Lock` e `CountPendingReferences`. Por HTTP e SQS: `TestPendingReferenceResolved`, `TestPendingReferenceExpires` e `TestSQSPendingReferenceResolved` | OPS-12..14, TX-09, SQS-08, OBS-03 |
 | I07a | `TestFxGraph`: `fx.ValidateApp` com todos os módulos | TST-I07, FX-01 |
 | I07b | `TestFxLifecycle`: `fxtest.New` → `Start` → tráfego → `Stop`. Depois do stop, os workers terminaram (logs de fim), o pool está fechado e `goleak.VerifyNone` passa | TST-I07, FX-03..05 |
 | I07c | `TestFxFailFast`: configuração inválida ou banco inacessível fazem o `Start` falhar com um erro claro | FX-02 |

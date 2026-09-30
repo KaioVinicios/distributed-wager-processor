@@ -283,13 +283,14 @@ tx curta: SELECT id … WHERE status='PENDING_REFERENCE' AND next_attempt_at <= 
           FOR UPDATE SKIP LOCKED LIMIT n     → lista de IDs
 para cada ID, uow.Do:
      SELECT wallet FOR UPDATE → SELECT transaction FOR UPDATE
-     se status != PENDING_REFERENCE → ignorar (outra instância já tratou)
+     se status != PENDING_REFERENCE ou next_attempt_at > now → ignorar (outra instância já tratou ou reagendou)
      reavaliar §3.4 passos 14–15:
         resolvida      → PROCESSED (+ movimento, ledger, eventos)
         falha de regra → REJECTED
         ainda ausente  → expirou? REJECTED REFERENCE_NOT_FOUND : RescheduleReference
   COMMIT
-falha permanente → FAILED (transação separada)
+falha permanente → FAILED (transação separada: carteira → transação, recheck, Fail, AdvanceDependents)
+falha transitória → nada muda; o item continua devido e volta no ciclo seguinte
 ```
 
 ### 6.4 Abertura de carteira — `POST /wallets`

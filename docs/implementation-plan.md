@@ -131,13 +131,22 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 
 **Cobre:** SQS-01..07, SQS-09, SQS-10, AUTH-09 (políticas avaliadas pelo MiniStack com `AUTH=true`, provadas pelo I04f), TST-I04, TST-I05, OUT-02; parciais: SQS-08 (M6), SQS-11 (C10b no M8), TST-C11 (M8), OBS-03, FX-01, FX-03. **Eliminatório: E5 (SQS).** Spec: [`dev/specs/2026-09-29-m5-sqs-consumer-design.md`](dev/specs/2026-09-29-m5-sqs-consumer-design.md) · plano: [`dev/plans/2026-09-29-m5-sqs-consumer.md`](dev/plans/2026-09-29-m5-sqs-consumer.md).
 
-#### M6 — Worker de referências (~1,5 h)
+#### M6 — Worker de referências (~1,5 h) — ✅ concluído em 30/09
 
 - Adapter `references`: claim (novo método no `TransactionRepository`, com o `Lock` da transação), lock carteira → transação e chamada ao `wagering.Settle` (reavaliação, reagendamento e expiração já estão no domínio desde o M1); antecipação das pendências dependentes no caso de uso.
 - Testes I06 e I11 (reversões completas).
 - **Pronto desde o M3:** o worker chama `settleAndPersist(…, insert = false)` do `ProcessWager`, e a política de retentativa (`REFERENCE_*`) já vem do Fx.
 
-**Cobre:** OPS-12..14, TX-09.
+- **Entregue também:**
+  - o caso de uso `app.ResolveReferences` (reusa o `ProcessWager`), com `Claim`, `Resolve` e o `FAILED` em UoW separada; o `settleAndPersist` passou a receber a causa como função da referência (o `causationId` dos eventos do worker é a referência que os destravou);
+  - `TransactionRepository.ClaimDue`, `Lock` e `CountPendingReferences` (nenhuma migration);
+  - `adapters/references` (loop em sequência, backoff do claim, stop gracioso) e o módulo Fx;
+  - `REFERENCE_POLL_INTERVAL`, `REFERENCE_BATCH_SIZE` e as 3 métricas de referência;
+  - `StartApp(ctx, opts...)` no `testkit`.
+- **Achado da spec:** o recheck sob os locks confere o status **e** o horário (`next_attempt_at <= now`); só o status faria duas instâncias contarem a mesma tentativa.
+- **Achados da execução:** o plano não foi validado antes numa cópia. (1) Os I06/I06b passavam com a opção do `StartApp` ignorada (o TTL padrão cabe na janela por sorte); passaram a afirmar a agenda pedida. (2) Duas sabotagens não eram detectadas pelos testes de mistura (`TestConcurrentWorkers`, `TestWorkerVersusHTTP`): a vítima de um deadlock pode ser o worker, cujo erro é transitório. A ordem carteira → transação ganhou uma prova determinística (`TestResolveReferencesLockOrder`) e o recheck, `TestResolveReferencesSkips`/`Concurrent`.
+
+**Cobre:** OPS-12..14, TX-09 (em processo), SQS-08, TST-I06, I11; parciais: OBS-03, FX-01, FX-03, E7 (a prova com 3 processos é do C08b, M8). Spec: [`dev/specs/2026-09-30-m6-reference-worker-design.md`](dev/specs/2026-09-30-m6-reference-worker-design.md) · plano: [`dev/plans/2026-09-30-m6-reference-worker.md`](dev/plans/2026-09-30-m6-reference-worker.md).
 
 #### M7 — Observabilidade (~1 h)
 
@@ -222,6 +231,8 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | ~~Testes publicando os eventos do ambiente de desenvolvimento~~ | Eventos do banco `pda` somem da auditoria | ✅ Tratado no M4: todo teste que sobe o publisher tem banco próprio |
 | ~~Flake do I05b (`TestNoPublishBeforeCommit`)~~ | Evento "não entregue" em 1 de 4 execuções completas | ✅ Tratado no M5: o `Audit.Absent` cancelava um long poll no meio, e o poll órfão pegava o evento (`TestAuditAbsentLeavesNoPollBehind`) |
 | Long poll órfão no shutdown do consumidor | Mensagem liberada volta só depois de um visibility timeout | Aceito e documentado (messaging §4.5): sem perda nem duplicidade |
+| Duas instâncias contam a mesma tentativa de uma pendência | Expiração antes do limite | ✅ Tratado no M6: o recheck sob os locks confere status e horário (`TestResolveReferencesSkips`, `TestResolveReferencesConcurrent`) |
+| Deadlock entre o worker e o HTTP por ordem de lock invertida | `40P01` ou lock timeout | ✅ Tratado no M6: carteira → transação, provado por `TestResolveReferencesLockOrder` |
 | Estouro de prazo | Checkpoint do dia não atingido | Ordem de corte (§4), sempre preservando os eliminatórios |
 
 ---
@@ -236,7 +247,7 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | E4 Saldo negativo por concorrência | M2 ✅ (constraint) + M3 | M2 (I02a, `CHECK`), M3 (C02 em processo), M8 (C02, C10b) |
 | E5 Movimentação duplicada | M3 ✅ (HTTP) + M5 ✅ | M3 (C01a em processo, I22), M5 (I04a), M8 (C01, C05, C10) |
 | E6 Idempotência só em memória | M2 ✅ (índices únicos) + M3 ✅ | M2 (I02a, I18), M3 (I10, I21), M6 (I06), M8 (C08) |
-| E7 Dependência de instância única | M3–M6 | M8 (cluster com 3 processos) |
+| E7 Dependência de instância única | M3–M6 ✅ | M6 (dois workers em processo), M8 (cluster com 3 processos) |
 | E8 Publicação antes do commit | M4 ✅ | M4 (I05b) |
 | E9 Ledger auditável | M2 ✅ | M2 (I02b, I02c, I17 com `LedgerProblems`) + test-plan §6 |
 | E10 Mocks no lugar da infraestrutura | M0 (infraestrutura real) | Todos os marcos com testes de integração e e2e |

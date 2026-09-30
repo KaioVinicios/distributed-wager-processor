@@ -379,3 +379,6 @@ Emitido **uma vez**, quando a operação entra em `PENDING_REFERENCE`. As novas 
 | `outbox_oldest_pending_age_seconds` | gauge | — (atraso da outbox) |
 | `outbox_publish_lag_seconds` | histogram | `event_type` (`published_at − occurred_at`) |
 | `outbox_lease_reclaims_total` | counter | — (trabalho abandonado reassumido) |
+| `reference_pending_transactions` | gauge | — (operações em `PENDING_REFERENCE`, atualizado no máximo 1×/s pelo worker) |
+| `reference_retries_total` | counter | — (tentativas reagendadas) |
+| `reference_expired_total` | counter | — (rejeições por `REFERENCE_NOT_FOUND`) |
