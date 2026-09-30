@@ -37,7 +37,7 @@ func Options() []fx.Option {
 func OptionsFor(roles config.Roles) []fx.Option {
 	opts := []fx.Option{
 		fx.StopTimeout(config.MaxShutdownTimeout),
-		fx.WithLogger(func(log *slog.Logger) fxevent.Logger { return &fxevent.SlogLogger{Logger: log} }),
+		fx.WithLogger(fxLogger),
 		fx.Supply(roles),
 		config.Module,
 		observability.Module,
@@ -71,4 +71,13 @@ func logRoles(roles config.Roles, log *slog.Logger) {
 	if roles == (config.Roles{}) {
 		log.Warn("every role is disabled: only the admin server runs")
 	}
+}
+
+// fxLogger writes the Fx lifecycle events at DEBUG, so they do not bury the
+// application logs at INFO; Fx errors stay at ERROR (spec of the M0 pending
+// items, decision 3). LOG_LEVEL=debug shows the events again.
+func fxLogger(log *slog.Logger) fxevent.Logger {
+	l := &fxevent.SlogLogger{Logger: log}
+	l.UseLogLevel(slog.LevelDebug)
+	return l
 }

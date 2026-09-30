@@ -1,6 +1,10 @@
 package bootstrap_test
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -100,4 +104,50 @@ func TestOptionsFor(t *testing.T) {
 			t.Fatalf("ValidateApp() = %v", err)
 		}
 	})
+}
+
+// Covers: OBS-01 (U32; M0 pending item 3: Fx lifecycle events at DEBUG, Fx errors at ERROR)
+func TestFxEventsLogAtDebug(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/pda")
+	t.Setenv("OIDC_ISSUER", "http://localhost:8080/realms/pda")
+	t.Setenv("OIDC_JWKS_URL", "http://localhost:8080/realms/pda/protocol/openid-connect/certs")
+	t.Setenv("AWS_REGION", "us-east-1")
+
+	// build runs the constructors and invokes of the graph (no start, so no
+	// network) with the logger at level, and returns what was logged.
+	build := func(level string) string {
+		var buf bytes.Buffer
+		logTo := fx.Decorate(func() (*slog.Logger, error) { return observability.NewJSONLogger(&buf, level) })
+		boom := fx.Invoke(func() error { return errors.New("boom") })
+		if app := fx.New(append(bootstrap.OptionsFor(config.Roles{}), logTo, boom)...); app.Err() == nil {
+			t.Fatal("fx.New() error = nil, want the failing invoke")
+		}
+		return buf.String()
+	}
+	fxEvents := map[string]bool{
+		"provided": true, "supplied": true, "decorated": true, "invoking": true, "invoked": true,
+		"run": true, "initialized custom fxevent.Logger": true,
+	}
+
+	info := build("info")
+	failed := false
+	for line := range strings.Lines(info) {
+		var entry struct {
+			Level string `json:"level"`
+			Msg   string `json:"msg"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("log line %q is not JSON: %v", line, err)
+		}
+		if fxEvents[entry.Msg] {
+			t.Errorf("Fx event %q logged at %s with LOG_LEVEL=info; want it at DEBUG", entry.Msg, entry.Level)
+		}
+		failed = failed || (entry.Msg == "invoke failed" && entry.Level == "ERROR")
+	}
+	if !failed {
+		t.Fatalf("no ERROR \"invoke failed\" line with LOG_LEVEL=info:\n%s", info)
+	}
+	if debug := build("debug"); !strings.Contains(debug, `"level":"DEBUG","msg":"provided"`) {
+		t.Fatalf("no DEBUG \"provided\" line with LOG_LEVEL=debug; the events must be demoted, not dropped:\n%s", debug)
+	}
 }
