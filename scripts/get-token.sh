@@ -24,3 +24,4 @@ fi
 curl -fsS -d grant_type=client_credentials -d "client_id=$client" -d "client_secret=$secret" \
   "${KEYCLOAK_URL:-http://localhost:8080}/realms/$realm/protocol/openid-connect/token" \
   | sed -E 's/.*"access_token":"([^"]+)".*/\1/'
+echo # a resposta não termina com quebra de linha; o $(…) remove esta
