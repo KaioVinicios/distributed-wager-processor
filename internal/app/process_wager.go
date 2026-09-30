@@ -20,6 +20,19 @@ type ProcessRequest struct {
 	CorrelationID string
 	// CausationID is the message that caused the operation ("" over HTTP).
 	CausationID string
+	// Inbox is the SQS message that carries the operation (nil over HTTP).
+	Inbox *InboxReceipt
+}
+
+// InboxReceipt identifies the SQS message that carries the operation. When a
+// ProcessRequest has one, every outcome records it in inbox_messages in the
+// transaction that concludes the operation (SQS-04).
+type InboxReceipt struct {
+	Consumer    string
+	MessageID   string
+	MessageHash string
+	MessageType string
+	ReceivedAt  time.Time
 }
 
 // ProcessResult is the persisted outcome: PROCESSED, PENDING_REFERENCE,
@@ -79,7 +92,13 @@ func isRace(err error) bool {
 func (p *ProcessWager) attempt(ctx context.Context, req ProcessRequest) (ProcessResult, error) {
 	cmd := req.Command
 	if replay, err := lookup(ctx, p.reads, cmd); err != nil || replay != nil {
-		return ProcessResult{Tx: replay, Replay: replay != nil}, err
+		if err == nil && req.Inbox != nil {
+			err = p.uow.Do(ctx, func(r Repos) error { return recordInbox(ctx, r, req.Inbox, replay, true, p.clock.Now()) })
+		}
+		if err != nil {
+			return ProcessResult{}, err
+		}
+		return ProcessResult{Tx: replay, Replay: true}, nil
 	}
 	now := p.clock.Now()
 	var res ProcessResult
@@ -95,6 +114,9 @@ func (p *ProcessWager) attempt(ctx context.Context, req ProcessRequest) (Process
 		replay, err := lookup(ctx, r, cmd)
 		if err != nil || replay != nil {
 			res = ProcessResult{Tx: replay, Replay: replay != nil}
+			if err == nil {
+				err = recordInbox(ctx, r, req.Inbox, replay, true, now)
+			}
 			return err
 		}
 		tx, err := wagering.NewExternal(p.ids.New(), cmd, req.Via, req.CorrelationID, now)
@@ -105,7 +127,7 @@ func (p *ProcessWager) attempt(ctx context.Context, req ProcessRequest) (Process
 			return err
 		}
 		res = ProcessResult{Tx: tx}
-		return nil
+		return recordInbox(ctx, r, req.Inbox, tx, false, now)
 	})
 	if apperrors.Classify(err) == apperrors.KindPermanent {
 		return p.recordFailure(ctx, req, now, err)
@@ -134,8 +156,10 @@ func (p *ProcessWager) recordFailure(ctx context.Context, req ProcessRequest, no
 		if err := r.Transactions().Insert(ctx, tx); err != nil {
 			return err
 		}
-		_, err = r.Transactions().AdvanceDependents(ctx, cmd.ProviderID(), cmd.ExternalTransactionID(), now)
-		return err
+		if _, err := r.Transactions().AdvanceDependents(ctx, cmd.ProviderID(), cmd.ExternalTransactionID(), now); err != nil {
+			return err
+		}
+		return recordInbox(ctx, r, req.Inbox, tx, false, now)
 	})
 	switch {
 	case isRace(err):
@@ -147,6 +171,35 @@ func (p *ProcessWager) recordFailure(ctx context.Context, req ProcessRequest, no
 		"transactionId", tx.ID(), "walletId", cmd.WalletID(), "providerId", cmd.ProviderID(),
 		"correlationId", req.CorrelationID, "error", cause.Error())
 	return ProcessResult{Tx: tx}, nil
+}
+
+// recordInbox writes the SQS delivery of the operation with the outcome of tx
+// (SQS-04), in the transaction of r; nothing over HTTP (in == nil). A second
+// delivery of the same message fails with ErrInboxDuplicate.
+func recordInbox(ctx context.Context, r Repos, in *InboxReceipt, tx *wagering.WagerTransaction, replay bool, now time.Time) error {
+	if in == nil {
+		return nil
+	}
+	return r.Inbox().Insert(ctx, InboxMessage{
+		ConsumerName: in.Consumer, MessageID: in.MessageID, MessageHash: in.MessageHash, MessageType: in.MessageType,
+		TransactionID: tx.ID(), Outcome: inboxOutcome(tx.Status(), replay), ReceivedAt: in.ReceivedAt, ProcessedAt: now,
+	})
+}
+
+// inboxOutcome is how the operation concluded the message (data-model §3.4).
+func inboxOutcome(s wagering.Status, replay bool) InboxOutcome {
+	switch {
+	case replay:
+		return InboxIdempotentReplay
+	case s == wagering.StatusRejected:
+		return InboxRejected
+	case s == wagering.StatusPendingReference:
+		return InboxPendingReference
+	case s == wagering.StatusFailed:
+		return InboxFailed
+	default:
+		return InboxProcessed
+	}
 }
 
 // lookup applies D-08: the transaction found by (providerId, idempotencyKey)

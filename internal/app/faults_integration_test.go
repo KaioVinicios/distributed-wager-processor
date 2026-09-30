@@ -27,12 +27,27 @@ func (u *faultyUoW) Do(ctx context.Context, fn func(app.Repos) error) error {
 	return u.UnitOfWork.Do(ctx, func(r app.Repos) error { return fn(u.wrap(r, call)) })
 }
 
-// faultyRepos replaces the transaction or outbox repository when set.
+// faultyRepos replaces the transaction, outbox or inbox repository when set.
 type faultyRepos struct {
 	app.Repos
 	tx     app.TransactionRepository
 	outbox app.OutboxRepository
+	inbox  app.InboxRepository
 }
+
+func (f faultyRepos) Inbox() app.InboxRepository {
+	if f.inbox != nil {
+		return f.inbox
+	}
+	return f.Repos.Inbox()
+}
+
+type failingInbox struct {
+	app.InboxRepository
+	err error
+}
+
+func (f failingInbox) Insert(context.Context, app.InboxMessage) error { return f.err }
 
 func (f faultyRepos) Transactions() app.TransactionRepository {
 	if f.tx != nil {

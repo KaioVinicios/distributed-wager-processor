@@ -134,6 +134,15 @@ type op struct {
 
 func command(t *testing.T, w wallet.Wallet, o op) wagering.Command {
 	t.Helper()
+	cmd, err := wagering.NewCommand(input(w, o))
+	if err != nil {
+		t.Fatalf("NewCommand %+v: %v", o, err)
+	}
+	return cmd
+}
+
+// input is the raw operation of o on w, as an edge decodes it.
+func input(w wallet.Wallet, o op) wagering.Input {
 	key, currency := o.key, o.currency
 	if key == "" {
 		key = o.provider + ":" + o.ext
@@ -149,11 +158,7 @@ func command(t *testing.T, w wallet.Wallet, o op) wagering.Command {
 	if o.ref != "" {
 		in.ReferenceExternalTransactionID = ptr(o.ref)
 	}
-	cmd, err := wagering.NewCommand(in)
-	if err != nil {
-		t.Fatalf("NewCommand %+v: %v", o, err)
-	}
-	return cmd
+	return in
 }
 
 func request(cmd wagering.Command) app.ProcessRequest {
