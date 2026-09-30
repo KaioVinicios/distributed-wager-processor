@@ -123,7 +123,7 @@ func (p *ProcessWager) attempt(ctx context.Context, req ProcessRequest) (Process
 		if err != nil {
 			return domainError(err)
 		}
-		if err := p.settleAndPersist(ctx, r, tx, &w, now, true, req.CausationID); err != nil {
+		if err := p.settleAndPersist(ctx, r, tx, &w, now, true, fixedCause(req.CausationID)); err != nil {
 			return err
 		}
 		res = ProcessResult{Tx: tx}
@@ -227,12 +227,28 @@ func lookup(ctx context.Context, r Repos, cmd wagering.Command) (*wagering.Wager
 	return replay, domainError(err)
 }
 
+// causation gives the causationId of the events of an evaluation from the
+// reference it found (Reference.Tx is nil when there is none).
+type causation func(ref wagering.Reference) string
+
+// fixedCause is the message that carries the operation ("" over HTTP).
+func fixedCause(id string) causation { return func(wagering.Reference) string { return id } }
+
+// referenceCause is the operation that unblocked a pending one, when it exists
+// (messaging §7); empty when the reference was never found.
+func referenceCause(ref wagering.Reference) string {
+	if ref.Tx == nil {
+		return ""
+	}
+	return ref.Tx.ID()
+}
+
 // settleAndPersist evaluates the operation against its locked wallet and
 // writes the outcome in the order the triggers require (data-model §4.2):
 // the operation, then the balance and its entry, then the events. A terminal
 // outcome advances the operations waiting for it (D-11). The reference worker
-// (M6) calls it with insert = false.
-func (p *ProcessWager) settleAndPersist(ctx context.Context, r Repos, tx *wagering.WagerTransaction, w *wallet.Wallet, now time.Time, insert bool, causationID string) error {
+// calls it with insert = false and the reference as the cause.
+func (p *ProcessWager) settleAndPersist(ctx context.Context, r Repos, tx *wagering.WagerTransaction, w *wallet.Wallet, now time.Time, insert bool, cause causation) error {
 	var ref wagering.Reference
 	if refID := tx.ReferenceExternalTransactionID(); refID != "" {
 		var err error
@@ -244,7 +260,7 @@ func (p *ProcessWager) settleAndPersist(ctx context.Context, r Repos, tx *wageri
 	if err != nil {
 		return domainError(err)
 	}
-	envs, err := sealEvents(p.ids, out.Events, tx.CorrelationID(), causationID)
+	envs, err := sealEvents(p.ids, out.Events, tx.CorrelationID(), cause(ref))
 	if err != nil {
 		return err
 	}
