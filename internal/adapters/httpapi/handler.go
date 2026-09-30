@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/KaioVinicios/pda/internal/app"
 	"github.com/KaioVinicios/pda/internal/auth"
@@ -54,10 +55,24 @@ type Services struct {
 type Options struct {
 	DocsEnabled bool
 	Log         *slog.Logger
+	// Metrics receives the request and authentication measurements; nil discards them.
+	Metrics Metrics
 }
+
+// Metrics is what the edge reports (*observability.Metrics).
+type Metrics interface {
+	HTTPRequest(route, method string, status int, d time.Duration)
+	AuthFailure(reason string)
+}
+
+type nopMetrics struct{}
+
+func (nopMetrics) HTTPRequest(string, string, int, time.Duration) {}
+func (nopMetrics) AuthFailure(string)                             {}
 
 // handlers are the business routes.
 type handlers struct {
-	s   Services
-	log *slog.Logger
+	s       Services
+	log     *slog.Logger
+	metrics Metrics
 }

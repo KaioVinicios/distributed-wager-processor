@@ -148,3 +148,55 @@ func TestEdgeDocs(t *testing.T) {
 		t.Fatalf("GET /docs = %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
 }
+
+// Covers: OBS-03 (U20)
+// Sensitivity: labeling with r.URL.Path instead of the route pattern → the "/wallets/w-1" label appears and the pattern assertion fails.
+func TestEdgeRequestMetrics(t *testing.T) {
+	m := &recordedMetrics{}
+	e := newEdgeWith(t, httpapi.Services{}, false, m)
+
+	e.do(t, call{method: http.MethodGet, path: "/health/live"})
+	e.do(t, call{method: http.MethodGet, path: "/wallets/w-1"})         // no token: 401
+	e.do(t, call{method: http.MethodGet, path: "/nope/12345/whatever"}) // unmatched
+	e.do(t, call{method: http.MethodGet, path: "/wallets/w-2", token: tokenNoRole})
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	want := []string{
+		"GET /health/live|GET|200",
+		"GET /wallets/{walletId}|GET|401",
+		"unmatched|GET|404",
+		"GET /wallets/{walletId}|GET|403",
+	}
+	if strings.Join(m.requests, ",") != strings.Join(want, ",") {
+		t.Fatalf("requests = %v, want %v", m.requests, want)
+	}
+}
+
+// Covers: AUTH-02, AUTH-05, OBS-03 (U20)
+// Sensitivity: removing the "forbidden" count in authenticate → the third entry is missing.
+func TestEdgeAuthFailureMetrics(t *testing.T) {
+	m := &recordedMetrics{}
+	e := newEdgeWith(t, httpapi.Services{}, false, m)
+
+	e.do(t, call{method: http.MethodGet, path: "/wallets/w-1"})                     // no token
+	e.do(t, call{method: http.MethodGet, path: "/wallets/w-1", token: "forged"})    // invalid token
+	e.do(t, call{method: http.MethodGet, path: "/wallets/w-1", token: tokenNoRole}) // no role
+	e.do(t, call{method: http.MethodGet, path: "/providers/provider-b/wagering/transactions/x", token: tokenProviderA})
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	want := []string{"unauthenticated", "unauthenticated", "forbidden", "provider_mismatch"}
+	if strings.Join(m.failures, ",") != strings.Join(want, ",") {
+		t.Fatalf("failures = %v, want %v", m.failures, want)
+	}
+}
+
+// Covers: OBS-01 (closes the M3 minor: an empty route in the access log)
+func TestEdgeAccessLogUnmatchedRoute(t *testing.T) {
+	e := newEdge(t, httpapi.Services{}, false)
+	e.do(t, call{method: http.MethodGet, path: "/nope"})
+	if line := e.logs.String(); !strings.Contains(line, `"route":"unmatched"`) {
+		t.Fatalf("access log = %s, want route unmatched", line)
+	}
+}

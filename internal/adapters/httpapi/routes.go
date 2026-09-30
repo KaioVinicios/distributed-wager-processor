@@ -23,7 +23,7 @@ type route struct {
 
 func routes(opts Options, s Services) []route {
 	hh := healthHandler{health: s.Health}
-	h := handlers{s: s, log: opts.Log}
+	h := handlers{s: s, log: opts.Log, metrics: opts.Metrics}
 	rs := []route{
 		{http.MethodGet, "/health/live", nil, false, hh.live},
 		{http.MethodGet, "/health/ready", nil, false, hh.ready},
@@ -49,6 +49,9 @@ func routes(opts Options, s Services) []route {
 // fallback for unmatched routes; then, per route, authentication and roles,
 // and the JSON body checks.
 func New(opts Options, s Services) http.Handler {
+	if opts.Metrics == nil {
+		opts.Metrics = nopMetrics{}
+	}
 	mux := http.NewServeMux()
 	for _, rt := range routes(opts, s) {
 		var h http.Handler = rt.handle
@@ -56,11 +59,11 @@ func New(opts Options, s Services) http.Handler {
 			h = jsonBody(h)
 		}
 		if rt.roles != nil {
-			h = authenticate(s.Auth, opts.Log, rt.roles, h)
+			h = authenticate(s.Auth, opts.Log, opts.Metrics, rt.roles, h)
 		}
 		mux.Handle(rt.method+" "+rt.path, named(rt.method+" "+rt.path, h))
 	}
-	return withCorrelation(logAccess(opts.Log, recoverPanic(opts.Log, routeFallback(mux))))
+	return withCorrelation(logAccess(opts.Log, opts.Metrics, recoverPanic(opts.Log, routeFallback(mux))))
 }
 
 // named records the matched route for the access log.

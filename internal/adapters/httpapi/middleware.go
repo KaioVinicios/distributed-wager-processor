@@ -84,18 +84,28 @@ func (s *statusRecorder) Write(b []byte) (int, error) {
 	return s.ResponseWriter.Write(b)
 }
 
+// unmatchedRoute labels what no route pattern matched, keeping the metric's
+// cardinality fixed (spec M7, decision 8).
+const unmatchedRoute = "unmatched"
+
 // logAccess writes one line per request with a fixed set of fields: never a
-// header or a body (OBS-02).
-func logAccess(log *slog.Logger, next http.Handler) http.Handler {
+// header or a body (OBS-02), and reports the request to the metrics.
+func logAccess(log *slog.Logger, m Metrics, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		info := &requestInfo{}
 		rec := &statusRecorder{ResponseWriter: w}
 		ctx := context.WithValue(r.Context(), requestInfoKey, info)
 		next.ServeHTTP(rec, r.WithContext(ctx))
+		route := info.route
+		if route == "" {
+			route = unmatchedRoute
+		}
+		elapsed := time.Since(start)
+		m.HTTPRequest(route, r.Method, rec.status, elapsed)
 		log.InfoContext(ctx, "http request",
-			"method", r.Method, "route", info.route, "status", rec.status,
-			"durationMs", time.Since(start).Milliseconds(),
+			"method", r.Method, "route", route, "status", rec.status,
+			"durationMs", elapsed.Milliseconds(),
 			"correlationId", correlationID(ctx), "providerId", info.providerID)
 	})
 }
@@ -173,22 +183,25 @@ func routeFallback(mux *http.ServeMux) http.Handler {
 // authenticate requires a bearer token of one of roles and puts the
 // principal in the context (D-07). Authorization runs before any read or
 // write (AUTH-07).
-func authenticate(a Authenticator, log *slog.Logger, roles []auth.Role, next http.Handler) http.Handler {
+func authenticate(a Authenticator, log *slog.Logger, m Metrics, roles []auth.Role, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		raw, ok := bearerToken(r)
 		if !ok {
+			m.AuthFailure("unauthenticated")
 			unauthenticated(w, r, false)
 			return
 		}
 		p, err := a.Authenticate(ctx, raw)
 		if err != nil {
+			m.AuthFailure("unauthenticated")
 			log.DebugContext(ctx, "bearer token rejected", "correlationId", correlationID(ctx), "reason", err.Error())
 			unauthenticated(w, r, true)
 			return
 		}
 		infoOf(ctx).providerID = p.ProviderID
 		if !auth.HasAnyRole(p, roles...) {
+			m.AuthFailure("forbidden")
 			writeProblem(w, r, codeForbidden, "")
 			return
 		}

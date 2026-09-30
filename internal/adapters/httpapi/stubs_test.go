@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -70,6 +71,12 @@ type edge struct {
 
 func newEdge(t *testing.T, s httpapi.Services, docs bool) edge {
 	t.Helper()
+	return newEdgeWith(t, s, docs, nil)
+}
+
+// newEdgeWith is newEdge with the metrics the edge reports to.
+func newEdgeWith(t *testing.T, s httpapi.Services, docs bool, m httpapi.Metrics) edge {
+	t.Helper()
 	logs := &syncBuffer{}
 	if s.Auth == nil {
 		s.Auth = stubAuth{}
@@ -78,7 +85,26 @@ func newEdge(t *testing.T, s httpapi.Services, docs bool) edge {
 		s.Health = observability.NewHealth(slog.New(slog.DiscardHandler), nil, time.Second)
 	}
 	log := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	return edge{handler: httpapi.New(httpapi.Options{DocsEnabled: docs, Log: log}, s), logs: logs}
+	return edge{handler: httpapi.New(httpapi.Options{DocsEnabled: docs, Log: log, Metrics: m}, s), logs: logs}
+}
+
+// recordedMetrics keeps what the edge reports.
+type recordedMetrics struct {
+	mu       sync.Mutex
+	requests []string // route|method|status
+	failures []string
+}
+
+func (m *recordedMetrics) HTTPRequest(route, method string, status int, _ time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.requests = append(m.requests, fmt.Sprintf("%s|%s|%d", route, method, status))
+}
+
+func (m *recordedMetrics) AuthFailure(reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failures = append(m.failures, reason)
 }
 
 // call sends one request; body is sent as is.

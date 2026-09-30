@@ -48,7 +48,7 @@ func (h handlers) submitWager(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	if p, _ := auth.FromContext(ctx); !auth.ActsAs(p, cmd.ProviderID()) {
-		writeProblem(w, r, codeProviderMismatch, "")
+		h.providerMismatch(w, r)
 		return
 	}
 	res, err := h.s.Wagers.Execute(ctx, app.ProcessRequest{
@@ -86,7 +86,7 @@ func (h handlers) getTransactionByExternalID(w http.ResponseWriter, r *http.Requ
 	ctx := r.Context()
 	providerID := r.PathValue("providerId")
 	if p, _ := auth.FromContext(ctx); !auth.HasRole(p, auth.RoleWalletInternal) && !auth.ActsAs(p, providerID) {
-		writeProblem(w, r, codeProviderMismatch, "")
+		h.providerMismatch(w, r)
 		return
 	}
 	tx, err := h.s.Queries.GetTransactionByExternalID(ctx, providerID, r.PathValue("externalTransactionId"))
@@ -95,4 +95,12 @@ func (h handlers) getTransactionByExternalID(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, transactionResponse(tx))
+}
+
+// providerMismatch answers 403 PROVIDER_MISMATCH and counts it.
+func (h handlers) providerMismatch(w http.ResponseWriter, r *http.Request) {
+	if h.metrics != nil {
+		h.metrics.AuthFailure("provider_mismatch")
+	}
+	writeProblem(w, r, codeProviderMismatch, "")
 }
