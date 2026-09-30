@@ -17,8 +17,8 @@ func NewRegistry() *prometheus.Registry {
 	return reg
 }
 
-// Metrics implements app.Metrics and the ports of the outbox publisher and of
-// the SQS consumer with
+// Metrics implements app.Metrics and the ports of the outbox publisher, of
+// the SQS consumer and of the reference worker with
 // Prometheus collectors. M7 adds the rest of the catalog (ARCHITECTURE.md §13.2).
 type Metrics struct {
 	reconciliationDivergences prometheus.Counter
@@ -39,6 +39,10 @@ type Metrics struct {
 	sqsDLQDepth      *prometheus.GaugeVec
 	sqsReceiveErrors prometheus.Counter
 	sqsDeleteErrors  prometheus.Counter
+
+	referenceRetries prometheus.Counter
+	referenceExpired prometheus.Counter
+	referencePending prometheus.Gauge
 }
 
 // NewMetrics registers the collectors on reg.
@@ -110,11 +114,24 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 			Name: "sqs_delete_errors_total",
 			Help: "DeleteMessage calls that failed after the message was concluded.",
 		}),
+		referenceRetries: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "reference_retries_total",
+			Help: "Reference resolution attempts rescheduled for a later time.",
+		}),
+		referenceExpired: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "reference_expired_total",
+			Help: "Pending operations rejected with REFERENCE_NOT_FOUND after the retry limit or the TTL.",
+		}),
+		referencePending: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "reference_pending_transactions",
+			Help: "Operations waiting in PENDING_REFERENCE.",
+		}),
 	}
 	reg.MustRegister(m.reconciliationDivergences, m.outboxPublished, m.outboxPublishFailed,
 		m.outboxLeaseReclaims, m.outboxPending, m.outboxOldestPending, m.outboxPublishLatency,
 		m.sqsReceived, m.sqsProcessed, m.sqsDuration, m.wagerDuplicates, m.sqsRetries, m.sqsDLQSent,
-		m.sqsDLQDepth, m.sqsReceiveErrors, m.sqsDeleteErrors)
+		m.sqsDLQDepth, m.sqsReceiveErrors, m.sqsDeleteErrors,
+		m.referenceRetries, m.referenceExpired, m.referencePending)
 	return m
 }
 
@@ -167,3 +184,12 @@ func (m *Metrics) ReceiveFailed() { m.sqsReceiveErrors.Inc() }
 
 // DeleteFailed counts a DeleteMessage that failed after the message was concluded.
 func (m *Metrics) DeleteFailed() { m.sqsDeleteErrors.Inc() }
+
+// ReferenceRetried counts a pending operation rescheduled for a later attempt.
+func (m *Metrics) ReferenceRetried() { m.referenceRetries.Inc() }
+
+// ReferenceExpired counts a pending operation rejected because its limit was reached.
+func (m *Metrics) ReferenceExpired() { m.referenceExpired.Inc() }
+
+// ReferencePending sets the number of operations in PENDING_REFERENCE.
+func (m *Metrics) ReferencePending(n int) { m.referencePending.Set(float64(n)) }

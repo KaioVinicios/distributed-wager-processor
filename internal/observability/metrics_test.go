@@ -141,3 +141,29 @@ wager_duplicates_total{channel="sqs",layer="inbox"} 1
 	}
 	t.Fatal("sqs_processing_duration_seconds not registered")
 }
+
+// Covers: OBS-03, OPS-12, OPS-13 (spec M6, decision 13; ARCHITECTURE.md §13.2)
+func TestMetrics_References(t *testing.T) {
+	reg := observability.NewRegistry()
+	m := observability.NewMetrics(reg)
+	m.ReferenceRetried()
+	m.ReferenceRetried()
+	m.ReferenceExpired()
+	m.ReferencePending(4)
+
+	want := `
+# HELP reference_expired_total Pending operations rejected with REFERENCE_NOT_FOUND after the retry limit or the TTL.
+# TYPE reference_expired_total counter
+reference_expired_total 1
+# HELP reference_pending_transactions Operations waiting in PENDING_REFERENCE.
+# TYPE reference_pending_transactions gauge
+reference_pending_transactions 4
+# HELP reference_retries_total Reference resolution attempts rescheduled for a later time.
+# TYPE reference_retries_total counter
+reference_retries_total 2
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(want),
+		"reference_expired_total", "reference_pending_transactions", "reference_retries_total"); err != nil {
+		t.Fatal(err)
+	}
+}
