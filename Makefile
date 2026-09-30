@@ -10,7 +10,7 @@ GOVULNCHECK_VERSION ?= v1.8.0
 COMPOSE ?= docker compose
 INFRA_SERVICES := postgres keycloak ministack
 
-.PHONY: up down infra-up migrate-up migrate-down fmt fmt-check lint vet vuln tidy-check go-version-check test test-integration check
+.PHONY: up down infra-up migrate-up migrate-down fmt fmt-check lint vet vuln tidy-check go-version-check test test-integration test-e2e check
 
 up:
 	$(COMPOSE) up --build
@@ -63,5 +63,10 @@ test:
 
 test-integration: infra-up
 	go test -tags=integration -race -count=1 ./...
+
+# 3 processes of the binary, built by the tests with -tags faultinject -race
+# (test-plan §3.4). -p 1: the package drives the processes of a single cluster.
+test-e2e: infra-up
+	go test -tags=e2e -race -p 1 -count=1 -timeout 15m ./test/e2e/...
 
 check: fmt-check lint vet tidy-check go-version-check test
