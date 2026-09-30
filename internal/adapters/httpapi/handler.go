@@ -54,7 +54,9 @@ type Services struct {
 // Options configure the handler.
 type Options struct {
 	DocsEnabled bool
-	Log         *slog.Logger
+	// RequestTimeout bounds every authenticated route (HTTP_REQUEST_TIMEOUT, D-04); 0 sets none.
+	RequestTimeout time.Duration
+	Log            *slog.Logger
 	// Metrics receives the request and authentication measurements; nil discards them.
 	Metrics Metrics
 }

@@ -30,7 +30,7 @@ type handlerParams struct {
 }
 
 func newHandler(p handlerParams) http.Handler {
-	return New(Options{DocsEnabled: p.Config.APIDocsEnabled, Log: p.Log, Metrics: p.Metrics}, Services{
+	return New(Options{DocsEnabled: p.Config.APIDocsEnabled, RequestTimeout: p.Config.HTTPRequestTimeout, Log: p.Log, Metrics: p.Metrics}, Services{
 		Auth: p.Verifier, Wagers: p.Wagers, Wallets: p.Wallets, Queries: p.Queries,
 		Reconcile: p.Reconcile, Health: p.Health,
 	})

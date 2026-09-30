@@ -75,6 +75,7 @@ func (e *Env) Config() config.Config {
 		DatabaseURL:           e.DB.AppURL,
 		DBMaxConns:            4,
 		DBLockTimeout:         2 * time.Second,
+		HTTPRequestTimeout:    10 * time.Second,
 		ReferencePollInterval: 50 * time.Millisecond,
 		ReferenceBatchSize:    50,
 		OutboxBatchSize:       50,

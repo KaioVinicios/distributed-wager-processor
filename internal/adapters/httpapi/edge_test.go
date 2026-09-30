@@ -1,12 +1,18 @@
 package httpapi_test
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/KaioVinicios/pda/api"
 	"github.com/KaioVinicios/pda/internal/adapters/httpapi"
+	"github.com/KaioVinicios/pda/internal/domain/wallet"
+	"github.com/KaioVinicios/pda/internal/observability"
 )
 
 // Covers: HTTP-09, D-18 (U17: correlation)
@@ -199,4 +205,58 @@ func TestEdgeAccessLogUnmatchedRoute(t *testing.T) {
 	if line := e.logs.String(); !strings.Contains(line, `"route":"unmatched"`) {
 		t.Fatalf("access log = %s, want route unmatched", line)
 	}
+}
+
+// blockingReader answers GetWallet only when the request's context ends, as
+// a query on a database that does not answer.
+type blockingReader struct{ *stubReader }
+
+func (blockingReader) GetWallet(ctx context.Context, _ string) (wallet.Wallet, error) {
+	<-ctx.Done()
+	return wallet.Wallet{}, ctx.Err()
+}
+
+// slowChecker takes 100 ms, within the 2 s of a health check.
+type slowChecker struct{}
+
+func (slowChecker) Name() string { return "postgres" }
+
+func (slowChecker) Check(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(100 * time.Millisecond):
+		return nil
+	}
+}
+
+// Covers: HTTP-09, D-04 (U30: request deadline)
+func TestEdgeRequestDeadline(t *testing.T) {
+	log := slog.New(slog.DiscardHandler)
+	e := edge{logs: &syncBuffer{}, handler: httpapi.New(
+		httpapi.Options{Log: log, RequestTimeout: 50 * time.Millisecond},
+		httpapi.Services{
+			Auth: stubAuth{}, Queries: blockingReader{&stubReader{}},
+			Health: observability.NewHealth(log, []observability.Checker{slowChecker{}}, 2*time.Second),
+		},
+	)}
+
+	t.Run("an authenticated route ends with 503", func(t *testing.T) {
+		answered := make(chan *httptest.ResponseRecorder, 1)
+		go func() { answered <- e.do(t, call{method: http.MethodGet, path: "/wallets/w-1", token: tokenInternal}) }()
+		select {
+		case rec := <-answered:
+			wantProblem(t, rec, http.StatusServiceUnavailable, "TEMPORARILY_UNAVAILABLE", "")
+			if got := rec.Header().Get("Retry-After"); got != "1" {
+				t.Fatalf("Retry-After = %q, want 1", got)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no answer within 2s: the request has no deadline")
+		}
+	})
+	t.Run("the health has no deadline", func(t *testing.T) {
+		if rec := e.do(t, call{method: http.MethodGet, path: "/health/ready"}); rec.Code != http.StatusOK {
+			t.Fatalf("GET /health/ready = %d, want 200: a 100 ms check fits its 2 s", rec.Code)
+		}
+	})
 }

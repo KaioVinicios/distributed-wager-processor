@@ -137,6 +137,7 @@ func e2eTimes(c *config.Config) {
 	c.OutboxRetryBaseDelay, c.OutboxRetryMaxDelay = 200*time.Millisecond, 2*time.Second
 	c.ReferenceRetryBaseDelay, c.ReferencePollInterval = 200*time.Millisecond, 100*time.Millisecond
 	c.ReferenceMaxAttempts, c.ReferenceTTL = 3, 5*time.Second
+	c.HTTPRequestTimeout = 5 * time.Second
 }
 
 // buildBinary compiles cmd/pda with the fault points and the race detector

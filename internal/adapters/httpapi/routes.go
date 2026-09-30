@@ -46,8 +46,8 @@ func routes(opts Options, s Services) []route {
 
 // New returns the API handler: the routes behind the middlewares, from the
 // outside in: correlation, access log, panic recovery and the problem+json
-// fallback for unmatched routes; then, per route, authentication and roles,
-// and the JSON body checks.
+// fallback for unmatched routes; then, per authenticated route, the request
+// deadline, authentication and roles; and the JSON body checks.
 func New(opts Options, s Services) http.Handler {
 	if opts.Metrics == nil {
 		opts.Metrics = nopMetrics{}
@@ -60,6 +60,7 @@ func New(opts Options, s Services) http.Handler {
 		}
 		if rt.roles != nil {
 			h = authenticate(s.Auth, opts.Log, opts.Metrics, rt.roles, h)
+			h = withDeadline(opts.RequestTimeout, h)
 		}
 		mux.Handle(rt.method+" "+rt.path, named(rt.method+" "+rt.path, h))
 	}

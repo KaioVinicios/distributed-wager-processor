@@ -12,7 +12,7 @@ import (
 
 var allVars = []string{
 	"LOG_LEVEL", "HTTP_ADDR", "METRICS_ADDR", "SHUTDOWN_TIMEOUT", "DATABASE_URL",
-	"DB_MAX_CONNS", "DB_LOCK_TIMEOUT", "SQS_WAGER_QUEUE_NAME", "SQS_WAGER_DLQ_NAME",
+	"DB_MAX_CONNS", "DB_LOCK_TIMEOUT", "HTTP_REQUEST_TIMEOUT", "SQS_WAGER_QUEUE_NAME", "SQS_WAGER_DLQ_NAME",
 	"OIDC_ISSUER", "OIDC_JWKS_URL", "OIDC_AUDIENCE", "OIDC_CLOCK_SKEW", "API_DOCS_ENABLED",
 	"REFERENCE_RETRY_BASE_DELAY", "REFERENCE_RETRY_MAX_DELAY", "REFERENCE_MAX_ATTEMPTS", "REFERENCE_TTL",
 	"REFERENCE_POLL_INTERVAL", "REFERENCE_BATCH_SIZE",
@@ -51,7 +51,8 @@ func validConfig() config.Config {
 	return config.Config{
 		LogLevel: "info", HTTPAddr: ":8080", MetricsAddr: ":9090",
 		ShutdownTimeout: 20 * time.Second, DatabaseURL: validURL, DBMaxConns: 10, DBLockTimeout: 5 * time.Second,
-		WagerQueueName: "wager-transactions.fifo", WagerDLQName: "wager-transactions-dlq.fifo",
+		HTTPRequestTimeout: 10 * time.Second,
+		WagerQueueName:     "wager-transactions.fifo", WagerDLQName: "wager-transactions-dlq.fifo",
 		OIDCIssuer: validIssuer, OIDCJWKSURL: validJWKS, OIDCAudience: "pda-api", OIDCClockSkew: 30 * time.Second,
 		APIDocsEnabled:          true,
 		ReferenceRetryBaseDelay: time.Second, ReferenceRetryMaxDelay: time.Minute, ReferenceMaxAttempts: 8,
@@ -118,7 +119,7 @@ func TestLoad_ReadsEnvironment(t *testing.T) {
 	env := map[string]string{
 		"LOG_LEVEL": "debug", "HTTP_ADDR": ":18080", "METRICS_ADDR": ":19090",
 		"SHUTDOWN_TIMEOUT": "5s", "DATABASE_URL": "postgresql://u:p@db:5432/x",
-		"DB_MAX_CONNS": "4", "DB_LOCK_TIMEOUT": "2s", "SQS_WAGER_QUEUE_NAME": "w.fifo", "SQS_WAGER_DLQ_NAME": "d.fifo",
+		"DB_MAX_CONNS": "4", "DB_LOCK_TIMEOUT": "2s", "HTTP_REQUEST_TIMEOUT": "4s", "SQS_WAGER_QUEUE_NAME": "w.fifo", "SQS_WAGER_DLQ_NAME": "d.fifo",
 		"OIDC_ISSUER": "https://idp.example/realms/x", "OIDC_JWKS_URL": "https://idp.internal/certs",
 		"OIDC_AUDIENCE": "api", "OIDC_CLOCK_SKEW": "1s", "API_DOCS_ENABLED": "false",
 		"REFERENCE_RETRY_BASE_DELAY": "100ms", "REFERENCE_RETRY_MAX_DELAY": "1s", "REFERENCE_MAX_ATTEMPTS": "3",
@@ -140,7 +141,8 @@ func TestLoad_ReadsEnvironment(t *testing.T) {
 	want := config.Config{
 		LogLevel: "debug", HTTPAddr: ":18080", MetricsAddr: ":19090", ShutdownTimeout: 5 * time.Second,
 		DatabaseURL: "postgresql://u:p@db:5432/x", DBMaxConns: 4, DBLockTimeout: 2 * time.Second,
-		WagerQueueName: "w.fifo", WagerDLQName: "d.fifo",
+		HTTPRequestTimeout: 4 * time.Second,
+		WagerQueueName:     "w.fifo", WagerDLQName: "d.fifo",
 		OIDCIssuer: "https://idp.example/realms/x", OIDCJWKSURL: "https://idp.internal/certs",
 		OIDCAudience: "api", OIDCClockSkew: time.Second, APIDocsEnabled: false,
 		ReferenceRetryBaseDelay: 100 * time.Millisecond, ReferenceRetryMaxDelay: time.Second,
@@ -187,6 +189,8 @@ func TestValidate_RejectsInvalidValues(t *testing.T) {
 		{"zero max conns", func(c *config.Config) { c.DBMaxConns = 0 }, "DB_MAX_CONNS"},
 		{"zero lock timeout", func(c *config.Config) { c.DBLockTimeout = 0 }, "DB_LOCK_TIMEOUT"},
 		{"negative lock timeout", func(c *config.Config) { c.DBLockTimeout = -time.Second }, "DB_LOCK_TIMEOUT"},
+		{"request timeout at lock timeout", func(c *config.Config) { c.HTTPRequestTimeout = c.DBLockTimeout }, "HTTP_REQUEST_TIMEOUT"},
+		{"request timeout at write timeout", func(c *config.Config) { c.HTTPRequestTimeout = config.MaxHTTPRequestTimeout }, "HTTP_REQUEST_TIMEOUT"},
 		{"non-fifo queue", func(c *config.Config) { c.WagerQueueName = "wager" }, "SQS_WAGER_QUEUE_NAME"},
 		{"non-fifo dlq", func(c *config.Config) { c.WagerDLQName = "dlq" }, "SQS_WAGER_DLQ_NAME"},
 		{"dlq equals queue", func(c *config.Config) { c.WagerDLQName = c.WagerQueueName }, "SQS_WAGER_DLQ_NAME"},

@@ -16,6 +16,10 @@ const DefaultHTTPAddr = ":8080"
 // MaxShutdownTimeout is the Fx stop timeout; SHUTDOWN_TIMEOUT must stay below it.
 const MaxShutdownTimeout = 30 * time.Second
 
+// MaxHTTPRequestTimeout is the WriteTimeout of the API server;
+// HTTP_REQUEST_TIMEOUT must stay below it (D-04).
+const MaxHTTPRequestTimeout = 30 * time.Second
+
 // Config is the validated process configuration.
 type Config struct {
 	LogLevel        string        `env:"LOG_LEVEL" envDefault:"info"`
@@ -25,8 +29,10 @@ type Config struct {
 	DatabaseURL     string        `env:"DATABASE_URL"`
 	DBMaxConns      int32         `env:"DB_MAX_CONNS" envDefault:"10"`
 	DBLockTimeout   time.Duration `env:"DB_LOCK_TIMEOUT" envDefault:"5s"`
-	WagerQueueName  string        `env:"SQS_WAGER_QUEUE_NAME" envDefault:"wager-transactions.fifo"`
-	WagerDLQName    string        `env:"SQS_WAGER_DLQ_NAME" envDefault:"wager-transactions-dlq.fifo"`
+	// HTTPRequestTimeout bounds every authenticated request (D-04).
+	HTTPRequestTimeout time.Duration `env:"HTTP_REQUEST_TIMEOUT" envDefault:"10s"`
+	WagerQueueName     string        `env:"SQS_WAGER_QUEUE_NAME" envDefault:"wager-transactions.fifo"`
+	WagerDLQName       string        `env:"SQS_WAGER_DLQ_NAME" envDefault:"wager-transactions-dlq.fifo"`
 
 	// OIDC (D-07): the expected iss and where the keys are fetched are
 	// separate, because the issuer seen by clients (localhost) differs from

@@ -46,6 +46,9 @@ func (c Config) Validate() error {
 	if c.DBLockTimeout <= 0 {
 		fail("DB_LOCK_TIMEOUT", "must be greater than 0")
 	}
+	if c.HTTPRequestTimeout <= c.DBLockTimeout || c.HTTPRequestTimeout >= MaxHTTPRequestTimeout {
+		fail("HTTP_REQUEST_TIMEOUT", "must be greater than DB_LOCK_TIMEOUT and less than "+MaxHTTPRequestTimeout.String())
+	}
 	if !strings.HasSuffix(c.WagerQueueName, ".fifo") {
 		fail("SQS_WAGER_QUEUE_NAME", "must end with .fifo")
 	}

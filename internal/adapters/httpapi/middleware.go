@@ -242,3 +242,18 @@ func jsonBody(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// withDeadline bounds an authenticated request by d (HTTP_REQUEST_TIMEOUT,
+// D-04): a database that does not answer (frozen, its connections still
+// open) ends as context.DeadlineExceeded, which is transient (D-05), so the
+// answer is 503 with Retry-After. d = 0 sets no deadline.
+func withDeadline(d time.Duration, next http.Handler) http.Handler {
+	if d <= 0 {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), d)
+		defer cancel()
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
