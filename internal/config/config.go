@@ -52,6 +52,15 @@ type Config struct {
 	OutboxConcurrency    int           `env:"OUTBOX_CONCURRENCY" envDefault:"8"`
 	OutboxRetryBaseDelay time.Duration `env:"OUTBOX_RETRY_BASE_DELAY" envDefault:"1s"`
 	OutboxRetryMaxDelay  time.Duration `env:"OUTBOX_RETRY_MAX_DELAY" envDefault:"5m"`
+
+	// SQS consumer (D-12, messaging.md §4.1).
+	SQSConsumerPollers   int           `env:"SQS_CONSUMER_POLLERS" envDefault:"2"`
+	SQSReceiveBatch      int           `env:"SQS_RECEIVE_BATCH" envDefault:"10"`
+	SQSWaitTime          time.Duration `env:"SQS_WAIT_TIME" envDefault:"20s"`
+	SQSVisibilityTimeout time.Duration `env:"SQS_VISIBILITY_TIMEOUT" envDefault:"30s"`
+	SQSProcessingTimeout time.Duration `env:"SQS_PROCESSING_TIMEOUT" envDefault:"10s"`
+	SQSMaxInFlight       int           `env:"SQS_MAX_IN_FLIGHT" envDefault:"16"`
+	SQSRetryMaxDelay     time.Duration `env:"SQS_RETRY_MAX_DELAY" envDefault:"300s"`
 }
 
 // Load reads the environment and validates it. Errors name variables, never values.

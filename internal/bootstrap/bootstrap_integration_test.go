@@ -32,17 +32,15 @@ func integrationConfig(t *testing.T) config.Config {
 	root := testkit.RootAWSConfig(t)
 	wager, dlq := testkit.CreateQueues(t, sqs.NewFromConfig(root))
 	topic := testkit.NewEventsTopic(t, sqs.NewFromConfig(root), sns.NewFromConfig(root))
-	cfg := config.Config{
-		LogLevel: "error", HTTPAddr: testkit.FreeAddr(t), MetricsAddr: testkit.FreeAddr(t),
-		ShutdownTimeout: 5 * time.Second, DatabaseURL: env.DB.AppURL, DBMaxConns: 2,
-		DBLockTimeout: 2 * time.Second, WagerQueueName: wager, WagerDLQName: dlq,
-		OIDCIssuer: testkit.KeycloakIssuer, OIDCJWKSURL: testkit.KeycloakIssuer + "/protocol/openid-connect/certs",
-		OIDCAudience: "pda-api", OIDCClockSkew: time.Second, APIDocsEnabled: true,
-		ReferenceRetryBaseDelay: 100 * time.Millisecond, ReferenceRetryMaxDelay: time.Second,
-		ReferenceMaxAttempts: 3, ReferenceTTL: 3 * time.Second,
-		SNSEventsTopicName: topic.Name, OutboxBatchSize: 50, OutboxLease: 2 * time.Second,
-		OutboxPollInterval: 100 * time.Millisecond, OutboxConcurrency: 8,
-		OutboxRetryBaseDelay: 100 * time.Millisecond, OutboxRetryMaxDelay: time.Second,
+	cfg := env.Config() // the accelerated times of test-plan §3.3
+	cfg.HTTPAddr, cfg.MetricsAddr, cfg.DBMaxConns = testkit.FreeAddr(t), testkit.FreeAddr(t), 2
+	cfg.WagerQueueName, cfg.WagerDLQName, cfg.SNSEventsTopicName = wager, dlq, topic.Name
+	cfg.OIDCIssuer, cfg.OIDCJWKSURL = testkit.KeycloakIssuer, testkit.KeycloakIssuer+"/protocol/openid-connect/certs"
+	cfg.OIDCAudience, cfg.OIDCClockSkew, cfg.APIDocsEnabled = "pda-api", time.Second, true
+	cfg.ReferenceRetryBaseDelay, cfg.ReferenceRetryMaxDelay = 100*time.Millisecond, time.Second
+	cfg.ReferenceMaxAttempts, cfg.ReferenceTTL = 3, 3*time.Second
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("integration config: %v", err)
 	}
 	t.Setenv("DATABASE_URL", cfg.DatabaseURL) // config.Load stays valid even if Fx calls it
 	return cfg

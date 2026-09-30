@@ -17,6 +17,8 @@ var allVars = []string{
 	"REFERENCE_RETRY_BASE_DELAY", "REFERENCE_RETRY_MAX_DELAY", "REFERENCE_MAX_ATTEMPTS", "REFERENCE_TTL",
 	"SNS_EVENTS_TOPIC_NAME", "OUTBOX_BATCH_SIZE", "OUTBOX_LEASE", "OUTBOX_POLL_INTERVAL", "OUTBOX_CONCURRENCY",
 	"OUTBOX_RETRY_BASE_DELAY", "OUTBOX_RETRY_MAX_DELAY",
+	"SQS_CONSUMER_POLLERS", "SQS_RECEIVE_BATCH", "SQS_WAIT_TIME", "SQS_VISIBILITY_TIMEOUT",
+	"SQS_PROCESSING_TIMEOUT", "SQS_MAX_IN_FLIGHT", "SQS_RETRY_MAX_DELAY",
 }
 
 const (
@@ -56,6 +58,9 @@ func validConfig() config.Config {
 		SNSEventsTopicName: "wallet-events.fifo",
 		OutboxBatchSize:    50, OutboxLease: 30 * time.Second, OutboxPollInterval: 500 * time.Millisecond,
 		OutboxConcurrency: 8, OutboxRetryBaseDelay: time.Second, OutboxRetryMaxDelay: 5 * time.Minute,
+		SQSConsumerPollers: 2, SQSReceiveBatch: 10, SQSWaitTime: 20 * time.Second,
+		SQSVisibilityTimeout: 30 * time.Second, SQSProcessingTimeout: 10 * time.Second,
+		SQSMaxInFlight: 16, SQSRetryMaxDelay: 300 * time.Second,
 	}
 }
 
@@ -118,6 +123,9 @@ func TestLoad_ReadsEnvironment(t *testing.T) {
 		"REFERENCE_TTL": "3s", "SNS_EVENTS_TOPIC_NAME": "events.fifo", "OUTBOX_BATCH_SIZE": "10",
 		"OUTBOX_LEASE": "2s", "OUTBOX_POLL_INTERVAL": "100ms", "OUTBOX_CONCURRENCY": "2",
 		"OUTBOX_RETRY_BASE_DELAY": "100ms", "OUTBOX_RETRY_MAX_DELAY": "1s",
+		"SQS_CONSUMER_POLLERS": "1", "SQS_RECEIVE_BATCH": "5", "SQS_WAIT_TIME": "1s",
+		"SQS_VISIBILITY_TIMEOUT": "5s", "SQS_PROCESSING_TIMEOUT": "3s", "SQS_MAX_IN_FLIGHT": "4",
+		"SQS_RETRY_MAX_DELAY": "1s",
 	}
 	for k, v := range env {
 		t.Setenv(k, v)
@@ -138,6 +146,9 @@ func TestLoad_ReadsEnvironment(t *testing.T) {
 		SNSEventsTopicName: "events.fifo", OutboxBatchSize: 10, OutboxLease: 2 * time.Second,
 		OutboxPollInterval: 100 * time.Millisecond, OutboxConcurrency: 2,
 		OutboxRetryBaseDelay: 100 * time.Millisecond, OutboxRetryMaxDelay: time.Second,
+		SQSConsumerPollers: 1, SQSReceiveBatch: 5, SQSWaitTime: time.Second,
+		SQSVisibilityTimeout: 5 * time.Second, SQSProcessingTimeout: 3 * time.Second,
+		SQSMaxInFlight: 4, SQSRetryMaxDelay: time.Second,
 	}
 	if got != want {
 		t.Fatalf("Load() = %+v, want %+v", got, want)
@@ -197,6 +208,20 @@ func TestValidate_RejectsInvalidValues(t *testing.T) {
 		{"zero outbox base delay", func(c *config.Config) { c.OutboxRetryBaseDelay = 0 }, "OUTBOX_RETRY_BASE_DELAY"},
 		{"outbox max below base", func(c *config.Config) { c.OutboxRetryMaxDelay = c.OutboxRetryBaseDelay / 2 }, "OUTBOX_RETRY_MAX_DELAY"},
 		{"outbox max above a day", func(c *config.Config) { c.OutboxRetryMaxDelay = 25 * time.Hour }, "OUTBOX_RETRY_MAX_DELAY"},
+		{"zero pollers", func(c *config.Config) { c.SQSConsumerPollers = 0 }, "SQS_CONSUMER_POLLERS"},
+		{"zero receive batch", func(c *config.Config) { c.SQSReceiveBatch = 0 }, "SQS_RECEIVE_BATCH"},
+		{"receive batch above 10", func(c *config.Config) { c.SQSReceiveBatch = 11 }, "SQS_RECEIVE_BATCH"},
+		{"negative wait time", func(c *config.Config) { c.SQSWaitTime = -time.Second }, "SQS_WAIT_TIME"},
+		{"wait time above 20s", func(c *config.Config) { c.SQSWaitTime = 21 * time.Second }, "SQS_WAIT_TIME"},
+		{"wait time not in seconds", func(c *config.Config) { c.SQSWaitTime = 1500 * time.Millisecond }, "SQS_WAIT_TIME"},
+		{"visibility below 1s", func(c *config.Config) { c.SQSVisibilityTimeout = 500 * time.Millisecond }, "SQS_VISIBILITY_TIMEOUT"},
+		{"visibility above 12h", func(c *config.Config) { c.SQSVisibilityTimeout = 13 * time.Hour }, "SQS_VISIBILITY_TIMEOUT"},
+		{"visibility not in seconds", func(c *config.Config) { c.SQSVisibilityTimeout = 30500 * time.Millisecond }, "SQS_VISIBILITY_TIMEOUT"},
+		{"zero processing timeout", func(c *config.Config) { c.SQSProcessingTimeout = 0 }, "SQS_PROCESSING_TIMEOUT"},
+		{"processing at visibility", func(c *config.Config) { c.SQSProcessingTimeout = c.SQSVisibilityTimeout }, "SQS_PROCESSING_TIMEOUT"},
+		{"zero max in flight", func(c *config.Config) { c.SQSMaxInFlight = 0 }, "SQS_MAX_IN_FLIGHT"},
+		{"retry max below 1s", func(c *config.Config) { c.SQSRetryMaxDelay = 500 * time.Millisecond }, "SQS_RETRY_MAX_DELAY"},
+		{"retry max above 12h", func(c *config.Config) { c.SQSRetryMaxDelay = 13 * time.Hour }, "SQS_RETRY_MAX_DELAY"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

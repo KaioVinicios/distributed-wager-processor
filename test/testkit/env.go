@@ -80,5 +80,12 @@ func (e *Env) Config() config.Config {
 		OutboxConcurrency:    8,
 		OutboxRetryBaseDelay: 100 * time.Millisecond,
 		OutboxRetryMaxDelay:  time.Second,
+		SQSConsumerPollers:   2,
+		SQSReceiveBatch:      10,
+		SQSWaitTime:          time.Second,
+		SQSVisibilityTimeout: 5 * time.Second,
+		SQSProcessingTimeout: 3 * time.Second,
+		SQSMaxInFlight:       16,
+		SQSRetryMaxDelay:     time.Second,
 	}
 }

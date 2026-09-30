@@ -80,6 +80,7 @@ func (c Config) Validate() error {
 		fail("REFERENCE_TTL", "must be greater than 0")
 	}
 	c.validateOutbox(fail)
+	c.validateConsumer(fail)
 	return errors.Join(errs...)
 }
 
@@ -108,7 +109,41 @@ func (c Config) validateOutbox(fail func(v, reason string)) {
 	}
 }
 
+// validateConsumer checks the SQS consumer settings (messaging.md §4.1). SQS
+// takes the wait and the visibility in whole seconds.
+func (c Config) validateConsumer(fail func(v, reason string)) {
+	if c.SQSConsumerPollers < 1 {
+		fail("SQS_CONSUMER_POLLERS", "must be at least 1")
+	}
+	if c.SQSReceiveBatch < 1 || c.SQSReceiveBatch > maxReceiveBatch {
+		fail("SQS_RECEIVE_BATCH", "must be between 1 and 10")
+	}
+	if c.SQSWaitTime < 0 || c.SQSWaitTime > maxWaitTime || c.SQSWaitTime%time.Second != 0 {
+		fail("SQS_WAIT_TIME", "must be whole seconds between 0s and 20s")
+	}
+	visibilityOK := c.SQSVisibilityTimeout >= time.Second && c.SQSVisibilityTimeout <= maxVisibility &&
+		c.SQSVisibilityTimeout%time.Second == 0
+	if !visibilityOK {
+		fail("SQS_VISIBILITY_TIMEOUT", "must be whole seconds between 1s and 12h")
+	}
+	// Compared only with a valid visibility, so one mistake is reported once.
+	if c.SQSProcessingTimeout <= 0 || (visibilityOK && c.SQSProcessingTimeout >= c.SQSVisibilityTimeout) {
+		fail("SQS_PROCESSING_TIMEOUT", "must be greater than 0 and less than SQS_VISIBILITY_TIMEOUT")
+	}
+	if c.SQSMaxInFlight < 1 {
+		fail("SQS_MAX_IN_FLIGHT", "must be at least 1")
+	}
+	if c.SQSRetryMaxDelay < time.Second || c.SQSRetryMaxDelay > maxVisibility {
+		fail("SQS_RETRY_MAX_DELAY", "must be between 1s and 12h")
+	}
+}
+
 const (
+	// maxReceiveBatch, maxWaitTime and maxVisibility are the limits of
+	// ReceiveMessage and ChangeMessageVisibility.
+	maxReceiveBatch = 10
+	maxWaitTime     = 20 * time.Second
+	maxVisibility   = 12 * time.Hour
 	// maxRetryDelay bounds the retry delays; it is the upper bound
 	// wagering.NewReferenceRetryPolicy accepts.
 	maxRetryDelay = 24 * time.Hour
