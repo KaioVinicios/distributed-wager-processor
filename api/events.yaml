@@ -1,0 +1,217 @@
+openapi: 3.0.3
+info:
+  title: PDA — Eventos de integração
+  version: "1"
+  description: |
+    Contrato formal dos eventos publicados no tópico SNS FIFO `wallet-events.fifo`
+    ([`docs/messaging.md`](../docs/messaging.md) §6). Não há rotas: o documento só
+    define schemas.
+
+    **Como validar uma mensagem:** o corpo (entrega raw) valida contra `Envelope`, e
+    `data` valida contra o schema `<eventType>V<version>`, por exemplo
+    `WalletBalanceChangedV1`.
+
+    **Roteamento no SNS** (messaging §5.2): `MessageGroupId` = `walletId`;
+    `MessageDeduplicationId` = `eventId`; atributos `eventType` (String),
+    `eventVersion` (Number) e `correlationId` (String).
+
+    **Consumo** (messaging §7):
+    - a entrega é at-least-once, então deduplique pelo `eventId`;
+    - para saldo, ordene pelo `walletVersion`;
+    - ignore campos desconhecidos em versões futuras. Nesta versão, o publisher
+      nunca emite campo fora do schema.
+paths: {}
+components:
+  schemas:
+    Envelope:
+      type: object
+      description: Envelope comum (messaging §6.1). O envelope inteiro é o snapshot imutável gravado na outbox.
+      additionalProperties: false
+      required: [eventId, eventType, version, aggregateType, aggregateId, correlationId, occurredAt, data]
+      properties:
+        eventId:
+          type: string
+          description: UUIDv7 canônico, atribuído ao selar o envelope e estável em toda republicação.
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        eventType: { $ref: "#/components/schemas/EventType" }
+        version: { type: integer, enum: [1] }
+        aggregateType: { type: string, enum: [Wallet, WagerTransaction] }
+        aggregateId: { $ref: "#/components/schemas/Uuid" }
+        correlationId: { $ref: "#/components/schemas/Text" }
+        causationId:
+          allOf: [{ $ref: "#/components/schemas/Text" }]
+          description: "SQS: `messageId`. Worker de referências: `transactionId` da referência. Omitido no HTTP e na abertura."
+        occurredAt: { $ref: "#/components/schemas/Timestamp" }
+        data:
+          type: object
+          description: Valida contra `<eventType>V<version>`.
+      oneOf:
+        - description: Eventos da carteira.
+          properties:
+            eventType: { enum: [WalletBalanceChanged] }
+            aggregateType: { enum: [Wallet] }
+        - description: Eventos da transação.
+          properties:
+            eventType: { enum: [WagerTransactionProcessed, WagerTransactionRejected, WagerTransactionPendingReference] }
+            aggregateType: { enum: [WagerTransaction] }
+
+    EventType:
+      type: string
+      enum: [WalletBalanceChanged, WagerTransactionProcessed, WagerTransactionRejected, WagerTransactionPendingReference]
+
+    WalletBalanceChangedV1:
+      type: object
+      description: Emitido quando o saldo muda (messaging §6.2, OUT-11). `aggregateId` = `walletId`.
+      additionalProperties: false
+      required: [walletId, transactionId, transactionKind, direction, money, balanceBefore, balanceAfter, walletVersion]
+      properties:
+        walletId: { $ref: "#/components/schemas/Uuid" }
+        transactionId: { $ref: "#/components/schemas/Uuid" }
+        transactionKind: { type: string, enum: [OPENING, BET, WIN, REFUND, ROLLBACK] }
+        direction: { type: string, enum: [DEBIT, CREDIT] }
+        money: { $ref: "#/components/schemas/PositiveMoney" }
+        balanceBefore: { $ref: "#/components/schemas/Money" }
+        balanceAfter: { $ref: "#/components/schemas/Money" }
+        walletVersion: { $ref: "#/components/schemas/WalletVersion" }
+
+    WagerTransactionProcessedV1:
+      description: Emitido em toda conclusão bem-sucedida, inclusive `LOSS` e `OPENING` (messaging §6.3). `aggregateId` = `transactionId`.
+      oneOf:
+        - $ref: "#/components/schemas/WagerTransactionProcessedInternal"
+        - $ref: "#/components/schemas/WagerTransactionProcessedExternal"
+    WagerTransactionProcessedInternal:
+      type: object
+      description: Abertura de carteira. Sem metadados externos (OUT-13).
+      additionalProperties: false
+      required: [transactionId, origin, kind, walletId, playerId, money, balanceAfter, walletVersion, processedAt]
+      properties:
+        transactionId: { $ref: "#/components/schemas/Uuid" }
+        origin: { type: string, enum: [INTERNAL] }
+        kind: { type: string, enum: [OPENING] }
+        walletId: { $ref: "#/components/schemas/Uuid" }
+        playerId: { $ref: "#/components/schemas/Uuid" }
+        money: { $ref: "#/components/schemas/PositiveMoney" }
+        balanceAfter: { $ref: "#/components/schemas/Money" }
+        walletVersion: { $ref: "#/components/schemas/WalletVersion" }
+        processedAt: { $ref: "#/components/schemas/Timestamp" }
+    WagerTransactionProcessedExternal:
+      type: object
+      description: Operação de um provedor. As referências aparecem só quando a operação tem uma.
+      additionalProperties: false
+      required: [transactionId, origin, kind, walletId, playerId, providerId, externalTransactionId, roundId, gameId, money, balanceAfter, walletVersion, processedAt]
+      properties:
+        transactionId: { $ref: "#/components/schemas/Uuid" }
+        origin: { type: string, enum: [EXTERNAL] }
+        kind: { $ref: "#/components/schemas/ExternalKind" }
+        walletId: { $ref: "#/components/schemas/Uuid" }
+        playerId: { $ref: "#/components/schemas/Uuid" }
+        providerId: { $ref: "#/components/schemas/Text" }
+        externalTransactionId: { $ref: "#/components/schemas/Text" }
+        roundId: { $ref: "#/components/schemas/Text" }
+        gameId: { $ref: "#/components/schemas/Text" }
+        money:
+          allOf: [{ $ref: "#/components/schemas/Money" }]
+          description: "`0.00` só em `LOSS`."
+        balanceAfter: { $ref: "#/components/schemas/Money" }
+        walletVersion:
+          allOf: [{ $ref: "#/components/schemas/WalletVersion" }]
+          description: Versão depois da operação. Em `LOSS`, a versão corrente, sem incremento.
+        referenceExternalTransactionId: { $ref: "#/components/schemas/Text" }
+        referenceTransactionId: { $ref: "#/components/schemas/Uuid" }
+        processedAt: { $ref: "#/components/schemas/Timestamp" }
+
+    WagerTransactionRejectedV1:
+      type: object
+      description: Emitido em toda rejeição definitiva por regra de negócio, inclusive por expiração de referência (messaging §6.4). Só ocorre em operações externas.
+      additionalProperties: false
+      required: [transactionId, kind, walletId, playerId, providerId, externalTransactionId, roundId, gameId, money, failureCode, failureCategory, balance, rejectedAt]
+      properties:
+        transactionId: { $ref: "#/components/schemas/Uuid" }
+        kind: { $ref: "#/components/schemas/ExternalKind" }
+        walletId: { $ref: "#/components/schemas/Uuid" }
+        playerId: { $ref: "#/components/schemas/Uuid" }
+        providerId: { $ref: "#/components/schemas/Text" }
+        externalTransactionId: { $ref: "#/components/schemas/Text" }
+        roundId: { $ref: "#/components/schemas/Text" }
+        gameId: { $ref: "#/components/schemas/Text" }
+        money: { $ref: "#/components/schemas/Money" }
+        failureCode:
+          type: string
+          description: Rejeições do lifecycle §5.1. `INTERNAL_PERMANENT_FAILURE` não gera evento.
+          enum:
+            - INSUFFICIENT_FUNDS
+            - REVERSAL_INSUFFICIENT_FUNDS
+            - ALREADY_REVERSED
+            - REFERENCE_NOT_FOUND
+            - REFERENCE_NOT_PROCESSED
+            - PLAYER_WALLET_MISMATCH
+            - CURRENCY_MISMATCH
+            - REFERENCE_MISMATCH
+            - REVERSAL_AMOUNT_MISMATCH
+            - INVALID_REFERENCE_KIND
+        failureCategory: { type: string, enum: [CORRECTABLE, DEFINITIVE] }
+        balance:
+          allOf: [{ $ref: "#/components/schemas/Money" }]
+          description: Saldo observado no momento da rejeição.
+        referenceExternalTransactionId: { $ref: "#/components/schemas/Text" }
+        rejectedAt: { $ref: "#/components/schemas/Timestamp" }
+
+    WagerTransactionPendingReferenceV1:
+      type: object
+      description: Emitido uma vez, quando a operação entra em `PENDING_REFERENCE` (messaging §6.5). As novas tentativas não geram evento.
+      additionalProperties: false
+      required: [transactionId, kind, walletId, playerId, providerId, externalTransactionId, roundId, gameId, money, referenceExternalTransactionId, nextAttemptAt, expiresAt]
+      properties:
+        transactionId: { $ref: "#/components/schemas/Uuid" }
+        kind: { type: string, enum: [WIN, REFUND, ROLLBACK] }
+        walletId: { $ref: "#/components/schemas/Uuid" }
+        playerId: { $ref: "#/components/schemas/Uuid" }
+        providerId: { $ref: "#/components/schemas/Text" }
+        externalTransactionId: { $ref: "#/components/schemas/Text" }
+        roundId: { $ref: "#/components/schemas/Text" }
+        gameId: { $ref: "#/components/schemas/Text" }
+        money: { $ref: "#/components/schemas/PositiveMoney" }
+        referenceExternalTransactionId: { $ref: "#/components/schemas/Text" }
+        nextAttemptAt: { $ref: "#/components/schemas/Timestamp" }
+        expiresAt: { $ref: "#/components/schemas/Timestamp" }
+
+    Uuid:
+      type: string
+      description: UUID canônico, em minúsculas.
+      pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    Text:
+      type: string
+      description: 1 a 128 caracteres UTF-8.
+      minLength: 1
+      maxLength: 128
+    Timestamp:
+      type: string
+      description: RFC 3339 em UTC com exatamente 3 casas decimais (OUT-12).
+      pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    Currency:
+      type: string
+      description: ISO 4217, maiúsculas.
+      enum: [BRL, USD, EUR]
+    Money:
+      type: object
+      description: Valor não negativo, sempre com strings (OUT-12).
+      additionalProperties: false
+      required: [amount, currency]
+      properties:
+        amount: { type: string, pattern: "^(0|[1-9][0-9]*)\\.[0-9]{2}$" }
+        currency: { $ref: "#/components/schemas/Currency" }
+    PositiveMoney:
+      type: object
+      description: Valor maior que zero.
+      additionalProperties: false
+      required: [amount, currency]
+      properties:
+        amount: { type: string, pattern: "^(0\\.(0[1-9]|[1-9][0-9])|[1-9][0-9]*\\.[0-9]{2})$" }
+        currency: { $ref: "#/components/schemas/Currency" }
+    WalletVersion:
+      type: integer
+      format: int64
+      minimum: 1
+    ExternalKind:
+      type: string
+      enum: [BET, WIN, LOSS, REFUND, ROLLBACK]

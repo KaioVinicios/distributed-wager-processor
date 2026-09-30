@@ -13,3 +13,9 @@ var OpenAPI []byte
 //
 //go:embed swagger.html
 var SwaggerHTML []byte
+
+// Events is the OpenAPI 3.0.3 document with the schemas of the integration
+// events published to SNS (messaging.md §6); it has no paths.
+//
+//go:embed events.yaml
+var Events []byte
