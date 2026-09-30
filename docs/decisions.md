@@ -359,6 +359,7 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
 | Erro permanente sem `FAILED` (M5) | A linha já gravada com a mesma chave não pode ser lida: DLQ com `errorCode = INTERNAL_ERROR`, sem inbox (o 500 `INTERNAL_ERROR` do HTTP) |
 | Falha do `DeleteMessage` após o commit (M5) | Log e `sqs_delete_errors_total`; a reentrega cai na inbox como duplicata |
 | Pausa por instância (achado da spec do M9) | Cada instância fecha a sua pausa só depois de sofrer o próprio erro transitório. Numa queda geral, a mesma mensagem pode ser recebida uma vez por instância antes de todas pausarem. Por isso o `maxReceiveCount` precisa superar com folga o número de instâncias consumidoras: 10 contra 3 réplicas no compose. Os testes usam 3, e o R01 liga o consumidor numa só instância (messaging §4.3) |
+| Reprocessamento da DLQ (M10) | Na AWS, `aws sqs start-message-move-task`. O MiniStack 1.5.18 não implementa a ação (`InvalidAction`, verificado em 30/09), e o desafio não exige ferramenta de redrive: localmente, o produtor reenvia a mesma mensagem, com o mesmo `messageId`, depois de corrigir a causa. A inbox e a idempotência tornam o reenvio seguro. Sem script próprio (decisão do autor em 30/09; README §5) |
 | Long polling no shutdown (M5, achado da validação) | O poll cancelado pelo cliente continua aberto no broker até o fim do seu wait e pode esconder, por um visibility timeout, uma mensagem liberada nesse intervalo. Sem perda nem duplicidade (messaging §4.5). O `testkit.Audit.Absent` deixou de cancelar receives no meio pelo mesmo motivo |
 
 ---

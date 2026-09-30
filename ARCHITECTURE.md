@@ -4,7 +4,7 @@ Serviço em Go que movimenta carteiras de jogadores a partir de operações de p
 
 Este documento é **autossuficiente**: cada seção traz a decisão, o motivo e as consequências. Os detalhes operacionais (DDL, catálogos completos, parâmetros e roteiros de teste) estão nos documentos de [`docs/`](docs/), indicados em cada seção. O enunciado original está em [`CHALLENGE.md`](CHALLENGE.md).
 
-> **Documento vivo.** Escrito antes da implementação, a partir das decisões registradas em [`docs/decisions.md`](docs/decisions.md). Ele é atualizado ao fim de cada marco se a implementação detalhar ou alterar alguma decisão. As seções de limitações e de trabalho não concluído são fechadas na entrega.
+> **Como este documento foi mantido.** Ele foi escrito antes da implementação, a partir das decisões de [`docs/decisions.md`](docs/decisions.md), e revisado ao fim de cada marco contra o código. A revisão final (M10, 30/09/2026) conferiu que todo teste e toda métrica citados aqui existem no código. As limitações (§16) e o trabalho não concluído (§17) refletem o estado da entrega. Como executar e testar: [`README.md`](README.md) e [`docs/testing.md`](docs/testing.md).
 
 ---
 
@@ -349,7 +349,7 @@ O Fx executa os `OnStart` na ordem de registro e os `OnStop` na ordem inversa. A
    - espera as que estão em andamento até o prazo;
    - se o prazo vencer, cancela as restantes, faz rollback e libera a visibilidade para reentrega segura.
 3. **Publisher e worker de referências:** param de reservar trabalho e terminam o item atual. Um lease reservado e não publicado vence e é reassumido por outra instância. O worker para depois do publisher: os eventos do último item dele ficam na outbox e são publicados por outra instância ou no próximo start.
-4. **Dependências:** o pool do PostgreSQL e os clientes AWS (conexões ociosas do cliente HTTP do SDK) são fechados **depois** que todos os componentes que os usam terminaram. O teste I07b verifica isso com `goleak`.
+4. **Dependências:** o pool do PostgreSQL e os clientes AWS (conexões ociosas do cliente HTTP do SDK) são fechados **depois** que todos os componentes que os usam terminaram, e o servidor admin (`/metrics`) é o último a parar. O teste I07b verifica isso com `goleak`.
 
 **Encerramento abrupto (`SIGKILL`) é seguro por construção:** nada é removido do SQS sem commit, o lease da outbox expira e as pendências ficam agendadas no banco. Os testes e2e demonstram isso com um cluster de 3 processos e pontos de falha que encerram a instância com o código 137 no lugar exato (`internal/faultinject`, só no binário compilado com a tag `faultinject`): consumidor antes do commit e entre o commit e o `DeleteMessage` (C05b, C05a), HTTP entre o commit e a resposta (C05c), publisher com o evento reservado e entre a publicação e a confirmação (C06b, C06a), worker com a pendência reservada (C08b), e as 3 instâncias mortas com `SIGKILL` e reiniciadas (C08a).
 
@@ -390,7 +390,6 @@ As métricas Prometheus ficam em `/metrics`, em uma porta administrativa separad
 | `outbox_pending_events` / `outbox_oldest_pending_age_seconds` | gauge | — | Atraso da outbox |
 | `outbox_publish_lag_seconds` | histogram | `event_type` | Atraso da outbox (publicação − ocorrência) |
 | `outbox_published_total` / `outbox_publish_failures_total` / `outbox_lease_reclaims_total` | counter | `event_type` / — | Publicação, retries e recuperação |
-
 | `reconciliation_runs_total` | counter | `consistent` | Reconciliações |
 | `reconciliation_divergences_total` | counter | — | Divergências de reconciliação |
 | `auth_failures_total` | counter | `reason` (`unauthenticated`, `forbidden`, `provider_mismatch`) | Diagnóstico de acesso |
@@ -490,18 +489,42 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 11. **Um erro permanente do SNS não descarta o evento.** Um tópico apagado ou uma política revogada fazem a outbox acumular (`outbox_oldest_pending_age_seconds` sobe) até a intervenção; nada confirmado se perde.
 12. **Papéis por env (D-15).** `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED` (todos `true` por padrão) tiram o módulo do grafo; o admin `:9090` sempre sobe. O `/health/ready` continua exigindo PostgreSQL e SQS. Limitação: o `pda healthcheck` do container consulta a porta da API, então um container com `HTTP_ENABLED=false` ficaria sempre *unhealthy*.
 13. **A espera por referências é finita.** Uma reversão cuja referência fique retida além do limite (por exemplo, numa indisponibilidade prolongada da fila) é rejeitada com `REFERENCE_NOT_FOUND`. O limite é configurável (`REFERENCE_MAX_ATTEMPTS`, `REFERENCE_TTL`).
-
 14. **Ciclo de lock entre carteiras diferentes que se referenciam.** A antecipação de dependentes atualiza linhas de pendências de outra carteira sem travá-la. Duas pendências que se referenciam de carteiras diferentes poderiam, em teoria, formar um ciclo entre o worker e uma requisição HTTP. Isso já vale para o caminho HTTP desde o M3, e o `lock_timeout` o transforma num erro transitório (503 ou nova tentativa do worker); a ordem carteira → transação dentro da mesma carteira é provada por `TestResolveReferencesLockOrder`.
 15. **A pausa por saúde é por instância** (M9). Numa queda geral do PostgreSQL, cada instância só pausa depois do próprio erro transitório, então uma mensagem pode ser recebida uma vez por instância consumidora antes de todas pausarem. Por isso o `maxReceiveCount` precisa superar com folga o número de instâncias: são 10 contra 3 réplicas ([`docs/messaging.md`](docs/messaging.md) §4.3).
 16. **Um `Publish` que vence o prazo pode ser entregue depois.** Com o broker congelado, a requisição já enviada fica no buffer do socket e é processada quando o broker volta, embora o publisher já a tenha contado como falha e agendado outra tentativa. O evento chega de novo com o mesmo `eventId`, o que é o at-least-once de sempre (deduplicado pelo SNS FIFO em 5 min e pelos consumidores) (M9, R02).
-
-*Esta lista é revisada ao fim de cada marco e fechada na entrega.*
+17. **Reprocessamento da DLQ só pelo produtor, localmente.** O MiniStack 1.5.18 não implementa `StartMessageMoveTask` (responde `InvalidAction`). Na AWS, a mensagem volta da DLQ com `aws sqs start-message-move-task`. Localmente, o produtor reenvia a mesma mensagem, com o mesmo `messageId`, e a inbox e a idempotência tornam o reenvio seguro ([`README.md`](README.md) §5). Não há ferramenta própria de redrive.
+18. **Réplica *unhealthy* não é reiniciada.** O `restart: on-failure` do compose traz de volta um processo que **saiu** com erro, inclusive quando um servidor HTTP para sozinho (§11). Sem um orquestrador, porém, o Docker não reinicia um container só porque o healthcheck falha.
 
 ---
 
 ## 17. Trabalho não concluído
 
-*Preenchido na entrega.* Estado em 30/09/2026: **M0 a M9 concluídos**. O M0 entregou o esqueleto Fx, health, métricas, compose com 3 réplicas, Keycloak provisionado, MiniStack com IAM aplicado e tooling de qualidade. O M1 entregou o domínio (Money, carteira e ledger, máquina de estados, regras por tipo, referências, hash e idempotência, eventos) e o vocabulário de erros, com a tabela U do test-plan verde. O M2 entregou a persistência: migrations com todas as constraints, triggers e grants, o Unit of Work e os repositórios, provados contra o PostgreSQL real, inclusive todos os fluxos do domínio gravados de ponta a ponta. O M3 entregou o contrato (`api/openapi.yaml`), os casos de uso, a autenticação com o Keycloak real e as 9 rotas, com os testes de autenticação, isolamento, contrato e concorrência em processo. O M4 entregou o publisher da outbox (claim com lease, SNS FIFO, backoff, recuperação e stop gracioso), o contrato formal dos eventos (`api/events.yaml`) e a verificação de que todo evento é publicado e entregue. O M5 entregou o consumidor SQS (inbox na mesma transação, DLQ explícita e por redrive, backoff, pausa por saúde, liberação por prazo, shutdown em 5 passos) e a prova das políticas do broker. O M6 entregou o worker de referências (claim sem lease, itens em sequência, recheck de status e horário, `FAILED` isolado, expiração por tentativas e por TTL, retomada por outra instância depois de reinício), provado com dois workers em processo, com dois apps sobre o mesmo banco e no compose com 3 réplicas. O M7 entregou o catálogo de métricas, os logs com os identificadores e sem segredos, e as flags de papel. O M8 entregou o harness e2e (3 processos do binário, pontos de falha por build tag) e os cenários C01–C11. O M9 entregou a resiliência: queda do PostgreSQL e do MiniStack, shutdown gracioso com SQS e HTTP em andamento (R01–R04) e o prazo por requisição HTTP que a queda do banco exigiu. Os diferenciais opcionais (tracing com OpenTelemetry, dashboards, teste de carga e ledger de partidas dobradas) só serão feitos se houver folga ([`docs/implementation-plan.md`](docs/implementation-plan.md) M12).
+**Estado na entrega (30/09/2026):** os marcos M0 a M10 de [`docs/implementation-plan.md`](docs/implementation-plan.md) estão concluídos. Isso inclui:
+- todos os requisitos obrigatórios e os critérios eliminatórios E1–E10;
+- os testes unitários, de integração, de múltiplas instâncias (C01–C12) e de resiliência (R01–R04);
+- os três níveis rodando no CI.
+
+O [`docs/delivery-requirements.md`](docs/delivery-requirements.md) liga cada requisito ao teste que o comprova, e o histórico dos marcos está no [`docs/dev/diary.md`](docs/dev/diary.md).
+
+**Não feito (diferenciais opcionais do desafio):**
+- **Tracing com OpenTelemetry e dashboards** (OBS-05). Os logs trazem os identificadores de correlação, e as métricas Prometheus cobrem o catálogo pedido (§13).
+- **Teste de carga** (TST-L01), com throughput, p50/p95/p99 e atraso da outbox.
+- **Ledger de partidas dobradas** (LED-07). O ledger de entrada simples com cadeia verificável foi uma escolha (§3.3).
+
+**Fora do escopo, com o que faltaria para produção:**
+- **Retenção da inbox e da outbox:** os registros concluídos nunca são apagados (§16, item 6).
+- **Operação da DLQ:** não há ferramenta própria de redrive (§16, item 17), nem alarme sobre `sqs_dlq_depth`.
+- **Rate limiting e cotas por provedor** (§16, item 10).
+- **Gerenciador de segredos e rotação de credenciais:** os segredos são os valores locais do `.env.example` (§16, item 9).
+- **Papéis separados por container:** as flags existem, mas o healthcheck do container depende da API (§16, item 12).
+- **Imagens fixadas por digest:** as imagens são fixadas só por tag ([`docs/stack.md`](docs/stack.md) §2.2).
+
+**Pendências menores conhecidas** (sem efeito nas garantias; registradas nas revisões dos marcos):
+- **Instantes zerados na inbox:** a inbox aceita um instante zerado de recebimento ou conclusão. Todo caminho do código grava instantes reais.
+- **Escrita fora do UoW:** os repositórios sobre o pool, usados nas leituras, também expõem escritas. Só a convenção da D-14 impede usá-los fora de um `uow.Do`.
+- **Log do healthcheck:** o healthcheck do Docker gera uma linha de log de acesso do `/health/ready` em INFO a cada 5 s por réplica.
+
+**Verificação a partir de um clone limpo** (M11): é o passo seguinte a este documento. O que ela encontrar é corrigido ou registrado aqui.
 
 ---
 
@@ -509,7 +532,9 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 
 | Documento | Conteúdo |
 | --- | --- |
-| [`README.md`](README.md) | Como executar, configurar e testar |
+| [`README.md`](README.md) | Como executar, configurar e testar: pré-requisitos, variáveis, filas, migrations, identidades de teste e exemplos |
+| [`docs/testing.md`](docs/testing.md) | Preparação das dependências dos testes, integração, múltiplas instâncias, simulações de falha e build tags |
+| [`api/openapi.yaml`](api/openapi.yaml) · [`api/events.yaml`](api/events.yaml) | Contratos da API HTTP e dos eventos de saída, validados nos testes |
 | [`docs/decisions.md`](docs/decisions.md) | Registro detalhado de decisões (D-01 a D-20) |
 | [`docs/data-model.md`](docs/data-model.md) | Schema, constraints, triggers, roles, consultas críticas e migrations |
 | [`docs/transaction-lifecycle.md`](docs/transaction-lifecycle.md) | Máquina de estados, regras por tipo, referências, catálogo de códigos e pipelines |
@@ -520,3 +545,4 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 | [`docs/delivery-requirements.md`](docs/delivery-requirements.md) | Checklist dos requisitos do desafio |
 | [`docs/implementation-plan.md`](docs/implementation-plan.md) | Marcos, riscos e ordem de corte |
 | [`docs/development-workflow.md`](docs/development-workflow.md) | Fluxo spec → plano → TDD → verificação |
+| [`docs/dev/`](docs/dev/) | Notas de desenvolvimento: specs e planos de cada marco, spikes e diário |

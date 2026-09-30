@@ -207,7 +207,10 @@ Uma falha do SQS (`ReceiveMessage` com erro) faz o poller tentar de novo com bac
 - **Métricas:**
   - `sqs_dlq_sent_total{reason}`: envios explícitos;
   - `sqs_dlq_depth`: gauge de `ApproximateNumberOfMessages`, atualizado a cada 30 s, que cobre também as redrives automáticas.
-- **Reprocessamento:** documentado no README. `aws sqs start-message-move-task` devolve a mensagem da DLQ para a fila principal; se o MiniStack não suportar, um script lê da DLQ e reenvia. A mensagem reprocessada cai na inbox ou na idempotência normalmente.
+- **Reprocessamento** ([`README.md`](../README.md) §5, D-12):
+  - na AWS, `aws sqs start-message-move-task` devolve a mensagem da DLQ para a fila principal;
+  - o MiniStack 1.5.18 não implementa essa ação (responde `InvalidAction`, verificado no M10). Localmente, o produtor reenvia a mesma mensagem, com o mesmo `messageId`, depois de corrigir a causa;
+  - em qualquer caso, a mensagem reprocessada cai na inbox ou na idempotência normalmente.
 
 ### 4.5 Shutdown (SQS-09)
 
