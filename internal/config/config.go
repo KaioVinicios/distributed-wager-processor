@@ -43,6 +43,15 @@ type Config struct {
 	ReferenceRetryMaxDelay  time.Duration `env:"REFERENCE_RETRY_MAX_DELAY" envDefault:"60s"`
 	ReferenceMaxAttempts    int           `env:"REFERENCE_MAX_ATTEMPTS" envDefault:"8"`
 	ReferenceTTL            time.Duration `env:"REFERENCE_TTL" envDefault:"10m"`
+
+	// Outbox publisher (D-13, messaging.md §5.1).
+	SNSEventsTopicName   string        `env:"SNS_EVENTS_TOPIC_NAME" envDefault:"wallet-events.fifo"`
+	OutboxBatchSize      int           `env:"OUTBOX_BATCH_SIZE" envDefault:"50"`
+	OutboxLease          time.Duration `env:"OUTBOX_LEASE" envDefault:"30s"`
+	OutboxPollInterval   time.Duration `env:"OUTBOX_POLL_INTERVAL" envDefault:"500ms"`
+	OutboxConcurrency    int           `env:"OUTBOX_CONCURRENCY" envDefault:"8"`
+	OutboxRetryBaseDelay time.Duration `env:"OUTBOX_RETRY_BASE_DELAY" envDefault:"1s"`
+	OutboxRetryMaxDelay  time.Duration `env:"OUTBOX_RETRY_MAX_DELAY" envDefault:"5m"`
 }
 
 // Load reads the environment and validates it. Errors name variables, never values.

@@ -15,6 +15,8 @@ var allVars = []string{
 	"DB_MAX_CONNS", "DB_LOCK_TIMEOUT", "SQS_WAGER_QUEUE_NAME", "SQS_WAGER_DLQ_NAME",
 	"OIDC_ISSUER", "OIDC_JWKS_URL", "OIDC_AUDIENCE", "OIDC_CLOCK_SKEW", "API_DOCS_ENABLED",
 	"REFERENCE_RETRY_BASE_DELAY", "REFERENCE_RETRY_MAX_DELAY", "REFERENCE_MAX_ATTEMPTS", "REFERENCE_TTL",
+	"SNS_EVENTS_TOPIC_NAME", "OUTBOX_BATCH_SIZE", "OUTBOX_LEASE", "OUTBOX_POLL_INTERVAL", "OUTBOX_CONCURRENCY",
+	"OUTBOX_RETRY_BASE_DELAY", "OUTBOX_RETRY_MAX_DELAY",
 }
 
 const (
@@ -50,7 +52,10 @@ func validConfig() config.Config {
 		OIDCIssuer: validIssuer, OIDCJWKSURL: validJWKS, OIDCAudience: "pda-api", OIDCClockSkew: 30 * time.Second,
 		APIDocsEnabled:          true,
 		ReferenceRetryBaseDelay: time.Second, ReferenceRetryMaxDelay: time.Minute, ReferenceMaxAttempts: 8,
-		ReferenceTTL: 10 * time.Minute,
+		ReferenceTTL:       10 * time.Minute,
+		SNSEventsTopicName: "wallet-events.fifo",
+		OutboxBatchSize:    50, OutboxLease: 30 * time.Second, OutboxPollInterval: 500 * time.Millisecond,
+		OutboxConcurrency: 8, OutboxRetryBaseDelay: time.Second, OutboxRetryMaxDelay: 5 * time.Minute,
 	}
 }
 
@@ -110,7 +115,9 @@ func TestLoad_ReadsEnvironment(t *testing.T) {
 		"OIDC_ISSUER": "https://idp.example/realms/x", "OIDC_JWKS_URL": "https://idp.internal/certs",
 		"OIDC_AUDIENCE": "api", "OIDC_CLOCK_SKEW": "1s", "API_DOCS_ENABLED": "false",
 		"REFERENCE_RETRY_BASE_DELAY": "100ms", "REFERENCE_RETRY_MAX_DELAY": "1s", "REFERENCE_MAX_ATTEMPTS": "3",
-		"REFERENCE_TTL": "3s",
+		"REFERENCE_TTL": "3s", "SNS_EVENTS_TOPIC_NAME": "events.fifo", "OUTBOX_BATCH_SIZE": "10",
+		"OUTBOX_LEASE": "2s", "OUTBOX_POLL_INTERVAL": "100ms", "OUTBOX_CONCURRENCY": "2",
+		"OUTBOX_RETRY_BASE_DELAY": "100ms", "OUTBOX_RETRY_MAX_DELAY": "1s",
 	}
 	for k, v := range env {
 		t.Setenv(k, v)
@@ -128,6 +135,9 @@ func TestLoad_ReadsEnvironment(t *testing.T) {
 		OIDCAudience: "api", OIDCClockSkew: time.Second, APIDocsEnabled: false,
 		ReferenceRetryBaseDelay: 100 * time.Millisecond, ReferenceRetryMaxDelay: time.Second,
 		ReferenceMaxAttempts: 3, ReferenceTTL: 3 * time.Second,
+		SNSEventsTopicName: "events.fifo", OutboxBatchSize: 10, OutboxLease: 2 * time.Second,
+		OutboxPollInterval: 100 * time.Millisecond, OutboxConcurrency: 2,
+		OutboxRetryBaseDelay: 100 * time.Millisecond, OutboxRetryMaxDelay: time.Second,
 	}
 	if got != want {
 		t.Fatalf("Load() = %+v, want %+v", got, want)
@@ -178,6 +188,15 @@ func TestValidate_RejectsInvalidValues(t *testing.T) {
 		{"max above a day", func(c *config.Config) { c.ReferenceRetryMaxDelay = 25 * time.Hour }, "REFERENCE_RETRY_MAX_DELAY"},
 		{"zero attempts", func(c *config.Config) { c.ReferenceMaxAttempts = 0 }, "REFERENCE_MAX_ATTEMPTS"},
 		{"zero ttl", func(c *config.Config) { c.ReferenceTTL = 0 }, "REFERENCE_TTL"},
+		{"non-fifo topic", func(c *config.Config) { c.SNSEventsTopicName = "wallet-events" }, "SNS_EVENTS_TOPIC_NAME"},
+		{"zero batch", func(c *config.Config) { c.OutboxBatchSize = 0 }, "OUTBOX_BATCH_SIZE"},
+		{"batch above 1000", func(c *config.Config) { c.OutboxBatchSize = 1001 }, "OUTBOX_BATCH_SIZE"},
+		{"zero lease", func(c *config.Config) { c.OutboxLease = 0 }, "OUTBOX_LEASE"},
+		{"zero poll interval", func(c *config.Config) { c.OutboxPollInterval = 0 }, "OUTBOX_POLL_INTERVAL"},
+		{"zero concurrency", func(c *config.Config) { c.OutboxConcurrency = 0 }, "OUTBOX_CONCURRENCY"},
+		{"zero outbox base delay", func(c *config.Config) { c.OutboxRetryBaseDelay = 0 }, "OUTBOX_RETRY_BASE_DELAY"},
+		{"outbox max below base", func(c *config.Config) { c.OutboxRetryMaxDelay = c.OutboxRetryBaseDelay / 2 }, "OUTBOX_RETRY_MAX_DELAY"},
+		{"outbox max above a day", func(c *config.Config) { c.OutboxRetryMaxDelay = 25 * time.Hour }, "OUTBOX_RETRY_MAX_DELAY"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -231,6 +250,7 @@ func TestLoad_ErrorsNeverContainValues(t *testing.T) {
 		{"unparsable lock timeout", "DB_LOCK_TIMEOUT", "forever-77", "forever-77", "DB_LOCK_TIMEOUT"},
 		{"credentials in issuer", "OIDC_ISSUER", "ftp://admin:IssuerSecret7@idp/realms/pda", "IssuerSecret7", "OIDC_ISSUER"},
 		{"unparsable flag", "API_DOCS_ENABLED", "maybe-42", "maybe-42", "API_DOCS_ENABLED"},
+		{"unparsable lease", "OUTBOX_LEASE", "long-lease-5", "long-lease-5", "OUTBOX_LEASE"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

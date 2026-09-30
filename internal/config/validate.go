@@ -70,8 +70,8 @@ func (c Config) Validate() error {
 	if c.ReferenceRetryBaseDelay <= 0 {
 		fail("REFERENCE_RETRY_BASE_DELAY", "must be greater than 0")
 	}
-	if c.ReferenceRetryMaxDelay < c.ReferenceRetryBaseDelay || c.ReferenceRetryMaxDelay > maxReferenceRetryDelay {
-		fail("REFERENCE_RETRY_MAX_DELAY", "must be between REFERENCE_RETRY_BASE_DELAY and "+maxReferenceRetryDelay.String())
+	if c.ReferenceRetryMaxDelay < c.ReferenceRetryBaseDelay || c.ReferenceRetryMaxDelay > maxRetryDelay {
+		fail("REFERENCE_RETRY_MAX_DELAY", "must be between REFERENCE_RETRY_BASE_DELAY and "+maxRetryDelay.String())
 	}
 	if c.ReferenceMaxAttempts < 1 {
 		fail("REFERENCE_MAX_ATTEMPTS", "must be at least 1")
@@ -79,11 +79,42 @@ func (c Config) Validate() error {
 	if c.ReferenceTTL <= 0 {
 		fail("REFERENCE_TTL", "must be greater than 0")
 	}
+	c.validateOutbox(fail)
 	return errors.Join(errs...)
 }
 
-// maxReferenceRetryDelay is the upper bound wagering.NewReferenceRetryPolicy accepts.
-const maxReferenceRetryDelay = 24 * time.Hour
+// validateOutbox checks the publisher settings (messaging.md §5.1).
+func (c Config) validateOutbox(fail func(v, reason string)) {
+	if !strings.HasSuffix(c.SNSEventsTopicName, ".fifo") {
+		fail("SNS_EVENTS_TOPIC_NAME", "must end with .fifo")
+	}
+	if c.OutboxBatchSize < 1 || c.OutboxBatchSize > maxOutboxBatchSize {
+		fail("OUTBOX_BATCH_SIZE", "must be between 1 and 1000")
+	}
+	if c.OutboxLease <= 0 {
+		fail("OUTBOX_LEASE", "must be greater than 0")
+	}
+	if c.OutboxPollInterval <= 0 {
+		fail("OUTBOX_POLL_INTERVAL", "must be greater than 0")
+	}
+	if c.OutboxConcurrency < 1 {
+		fail("OUTBOX_CONCURRENCY", "must be at least 1")
+	}
+	if c.OutboxRetryBaseDelay <= 0 {
+		fail("OUTBOX_RETRY_BASE_DELAY", "must be greater than 0")
+	}
+	if c.OutboxRetryMaxDelay < c.OutboxRetryBaseDelay || c.OutboxRetryMaxDelay > maxRetryDelay {
+		fail("OUTBOX_RETRY_MAX_DELAY", "must be between OUTBOX_RETRY_BASE_DELAY and "+maxRetryDelay.String())
+	}
+}
+
+const (
+	// maxRetryDelay bounds the retry delays; it is the upper bound
+	// wagering.NewReferenceRetryPolicy accepts.
+	maxRetryDelay = 24 * time.Hour
+	// maxOutboxBatchSize bounds the rows one claim leases.
+	maxOutboxBatchSize = 1000
+)
 
 // httpURLProblem returns why raw is not an absolute http(s) URL, or "" if it is.
 // Like databaseURLProblem, it never echoes the value.
