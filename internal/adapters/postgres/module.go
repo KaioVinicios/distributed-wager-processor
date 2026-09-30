@@ -8,12 +8,14 @@ import (
 )
 
 // Module provides the pool, the unit of work, the repositories over the pool
-// for reads (D-14) and the "postgres" health checker.
+// for reads (D-14), the outbox store of the publisher (D-13) and the
+// "postgres" health checker.
 var Module = fx.Module("postgres",
 	fx.Provide(
 		NewPool,
 		fx.Annotate(NewUnitOfWork, fx.As(new(app.UnitOfWork))),
 		NewRepos,
+		fx.Annotate(NewOutboxStore, fx.As(new(app.OutboxStore))),
 		fx.Annotate(NewChecker, fx.As(new(observability.Checker)), fx.ResultTags(`group:"health_checkers"`)),
 	),
 )
