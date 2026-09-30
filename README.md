@@ -371,12 +371,13 @@ wager 8082 REFUND refund-3 10.00 bet-3    # a BET referenciada ainda não chegou
 wager 8083 BET bet-3 10.00
 # {"transactionId":"01a0f436-a541-…","status":"PROCESSED","balance":{"amount":"10.00",…},…}  HTTP 200
 
+sleep 1   # o worker conclui a pendência em até ~0,5 s (REFERENCE_POLL_INTERVAL)
 curl -s localhost:8081/providers/provider-a/wagering/transactions/refund-3-$R \
   -H "Authorization: Bearer $PROVIDER_TOKEN" | jq '{kind, status, referenceTransactionId, balance}'
 # {"kind":"REFUND","status":"PROCESSED","referenceTransactionId":"01a0f436-a541-…","balance":{"amount":"20.00",…}}
 ```
 
-A chegada da BET antecipa a pendência, e o worker de referências de qualquer réplica a conclui. Sem a referência, a pendência expira em `REJECTED` com `REFERENCE_NOT_FOUND`, depois de 8 tentativas ou 10 min. A consulta pelo id interno é `GET /wagering/transactions/{transactionId}`.
+A chegada da BET antecipa a pendência, e o worker de referências de qualquer réplica a conclui, de forma assíncrona: uma consulta logo depois da BET ainda pode mostrar `PENDING_REFERENCE`, e o saldo e a versão da §8.6 contam com o REFUND concluído. Sem a referência, a pendência expira em `REJECTED` com `REFERENCE_NOT_FOUND`, depois de 8 tentativas ou 10 min. A consulta pelo id interno é `GET /wagering/transactions/{transactionId}`.
 
 ### 8.6 Carteira, ledger e reconciliação (serviço interno)
 
@@ -448,13 +449,17 @@ aws_root sqs receive-message --queue-url http://ministack:4566/000000000000/wall
 # WagerTransactionProcessed  01a0f436-…  …
 # WalletBalanceChanged       01a0f436-…  …
 
-curl -s localhost:9091/metrics | grep '^wager_transactions_total'
+for p in 9091 9092 9093; do curl -s localhost:$p/metrics | grep '^wager_transactions_total'; done
 # wager_transactions_total{channel="http",failure_code="",kind="BET",outcome="processed"} 1
-# wager_transactions_total{channel="sqs",failure_code="",kind="WIN",outcome="processed"} 1
 # wager_transactions_total{channel="worker",failure_code="",kind="REFUND",outcome="processed"} 1
+# wager_transactions_total{channel="sqs",failure_code="",kind="WIN",outcome="processed"} 1
+# wager_transactions_total{channel="http",failure_code="INSUFFICIENT_FUNDS",kind="BET",outcome="rejected"} 1
+# …
 ```
 
-- **Fila de auditoria:** é FIFO, então entrega primeiro os eventos mais antigos do ambiente. Uma mensagem lida fica invisível por 30 s e depois volta. Os contratos dos eventos estão em [`api/events.yaml`](api/events.yaml) e em [`docs/messaging.md`](docs/messaging.md) §6–§7.
+Cada réplica expõe só os próprios contadores, e a mensagem do SQS e o worker caem em qualquer uma, por isso o laço lê as 3. Num Prometheus, some por rótulo (`sum by (channel, kind, outcome)`).
+
+- **Fila de auditoria:** é FIFO, então entrega primeiro os eventos mais antigos do ambiente. Com 3 réplicas publicando, a ordem entre eventos da mesma carteira **não é estrita** (um evento da BET pode chegar antes dos da abertura); para o saldo, vale o `walletVersion` ([`docs/messaging.md`](docs/messaging.md) §7). Uma mensagem lida fica invisível por 30 s e depois volta. Os contratos dos eventos estão em [`api/events.yaml`](api/events.yaml) e em [`docs/messaging.md`](docs/messaging.md) §6–§7.
 - **Métricas e logs:** o catálogo de métricas está no [`ARCHITECTURE.md`](ARCHITECTURE.md) §13.2. Os logs são JSON: `docker compose logs -f app-1`.
 
 ---
@@ -471,7 +476,7 @@ Os testes usam só `testing` e `go test`, todos com `-race` nos alvos do `make`.
 | Integração (tag `integration`) | `make test-integration` | Docker (sobe a infraestrutura sozinho) | ~50 s com a infraestrutura de pé |
 | Multi-instância e falhas (tag `e2e`) | `make test-e2e` | Docker (idem) | ~2,5 min |
 
-¹ Medidos num MacBook (Apple Silicon) com o cache de build do Go preenchido. Quando a infraestrutura ainda não está de pé, o `make infra-up` soma cerca de 1 min, porque espera o Keycloak ficar pronto.
+¹ Medidos num MacBook (Apple Silicon) com o cache de build do Go preenchido. Quando a infraestrutura ainda não está de pé, o `make infra-up` soma cerca de 1 min, porque espera o Keycloak ficar pronto. Num clone novo, com os caches do Go vazios, a primeira execução soma o download dos módulos e a compilação: `go test ./...` levou ~32 s, e o `make test-e2e` ~2 min 20 s.
 
 ```sh
 go test ./...                 # os 4 comandos pedidos pelo desafio
