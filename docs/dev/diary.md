@@ -116,11 +116,31 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
   - 15 sabotagens detectadas;
   - compose com as 3 réplicas consumindo: um BET enviado como `provider-a` processado pelo SQS, eventos publicados com `causationId = messageId`, JSON quebrado na DLQ e o stop ordenado (HTTP → consumidor → publisher).
 
+## 30/09/2026 (qua): M6, worker de referências
+
+- [Spec](specs/2026-09-30-m6-reference-worker-design.md) → [plano](plans/2026-09-30-m6-reference-worker.md) → execução inline com TDD.
+- **Escolhas do autor na spec:** itens do lote **em sequência** em cada instância (o paralelismo vem das réplicas) e as decisões 1–7 (claim de um statement, recheck sob os locks, `causationId`, `FAILED` isolado, métricas no marco).
+- **Achado da spec:** o recheck confere status **e** horário. Só o status faria duas instâncias contarem a mesma tentativa duas vezes.
+- **Plano sem validação prévia:** ao contrário do M3–M5, o código não foi testado numa cópia descartável; o autor pediu cautela na execução, então cada red e cada green foram lidos, e cada teste sobre comportamento existente passou por sabotagem.
+- **Entregue:**
+  - `app.ResolveReferences` (reusa o `ProcessWager`), `ClaimDue`/`Lock`/`CountPendingReferences` e o `adapters/references` (loop, backoff do claim, stop gracioso, módulo Fx);
+  - `REFERENCE_POLL_INTERVAL`, `REFERENCE_BATCH_SIZE` e as 3 métricas de referência;
+  - `StartApp(ctx, opts...)`, e os testes I06, I06b, C2/C3 por HTTP, SQS-08 e a concorrência.
+- **Achados da execução:**
+  - o `TestFxGraph` e o `TestResolveReferences` deram o red por asserção, mas o I06 e o I06b **passavam com a opção do `StartApp` ignorada** (o TTL padrão cabe na janela por sorte). Passaram a afirmar a agenda pedida (TTL longo, atraso lento), e então o red foi real;
+  - duas sabotagens **não** eram detectadas pelos testes de mistura (`TestConcurrentWorkers`, `TestWorkerVersusHTTP`): a vítima de um deadlock pode ser o worker, cujo erro é transitório e reprocessado. A ordem carteira → transação ganhou uma prova determinística (`TestResolveReferencesLockOrder`: carteira travada por outra conexão, a avaliação enfileirada não pode segurar a linha da operação) e o recheck já tinha as suas (`Skips`, `Concurrent`);
+  - a sabotagem "o consumidor retenta a pendência em vez de apagá-la" não é detectada pelo teste de ponta a ponta (a reentrega cai na inbox como duplicata e é apagada um segundo depois); o `TestDecide` do M5 é a prova do delete imediato;
+  - o lint pegou um `switch` não exaustivo e o `contextcheck` num closure de `Eventually`.
+- **Prova final:**
+  - `make check` verde (`0 issues.`) e `make test-integration` verde três vezes seguidas, 21 pacotes;
+  - 13 sabotagens detectadas e 3 não detectadas pelos testes a que se destinavam (as duas de mistura, cobertas por testes determinísticos, e a do SQS, coberta pelo `TestDecide`);
+  - compose com as 3 réplicas: REFUND na réplica 1, BET na 2, REFUND resolvido e lido pela 3, reconciliação consistente; expiração real em cerca de 3,5 min com 7 retries distribuídos entre as 3 réplicas (`reference_retries_total` 1+5+1, `reference_expired_total` 1); parada de uma réplica na ordem HTTP → consumidor → publisher → worker.
+
 ## Onde paramos
 
-- **M5 concluído (commits aguardando autorização).** Próximo passo: **M6, worker de referências**, começando pela spec.
+- **M6 concluído (commits aguardando autorização).** Próximo passo: **M7, observabilidade**, começando pela spec.
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - decidir se os 3 minors do M0 entram em algum marco;
   - minors adiados na revisão do M2: inbox aceita instantes zerados; repositórios sobre o pool podem escrever fora do UoW (só a convenção da D-14 impede). O filtro de ID malformado de `List`/`Sum`/`AdvanceDependents` ficou resolvido no M3, pelos casos de uso (decisão 8);
-  - minors adiados na revisão do M3: o log de acesso grava `route` vazio para rotas inexistentes; o WARN da reconciliação registra os três saldos (confirmar a política no I14 do M7); o `settleAndPersist` com `insert = false` só ganha teste no M6.
+  - minors adiados na revisão do M3: o log de acesso grava `route` vazio para rotas inexistentes; o WARN da reconciliação registra os três saldos (confirmar a política no I14 do M7); o `settleAndPersist` com `insert = false` ganhou teste no M6 (`TestResolveReferences`).
