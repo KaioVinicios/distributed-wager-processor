@@ -5,6 +5,7 @@ package e2e_test
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/KaioVinicios/pda/test/testkit"
 )
@@ -100,4 +101,31 @@ func TestClusterInstanceLifecycle(t *testing.T) {
 		cluster.Restart(t, 1)
 		cluster.AssertAllReady(t)
 	})
+}
+
+// Covers: FX-04 (the harness of R03 and R04)
+//
+// StopAsync returns before the instance is gone and reports a clean stop;
+// ReadyStatus follows the instance from ready to gone.
+func TestClusterStopAsync(t *testing.T) {
+	defer cluster.Restore(t)
+	if got := cluster.Instance(2).ReadyStatus(t); got != http.StatusOK {
+		t.Fatalf("ReadyStatus before the stop = %d, want 200", got)
+	}
+	stopped := cluster.StopAsync(2)
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatalf("StopAsync: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("instance 2 did not stop within 20s")
+	}
+	if code := cluster.Instance(2).WaitExit(t); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	cluster.CloseIdleConnections()
+	if got := cluster.Instance(2).ReadyStatus(t); got != 0 {
+		t.Fatalf("ReadyStatus after the stop = %d, want 0 (no process)", got)
+	}
 }

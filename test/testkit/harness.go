@@ -82,6 +82,10 @@ func (h *Harness) Client(tb testing.TB, clientID string) *Client {
 // ClientWithToken returns a client that sends raw as the bearer token.
 func (h *Harness) ClientWithToken(raw string) *Client { return &Client{h: h, token: raw} }
 
+// CloseIdleConnections drops the idle keep-alive connections of the harness
+// client, so the next request dials again (R04: a stopping instance refuses).
+func (h *Harness) CloseIdleConnections() { h.http.CloseIdleConnections() }
+
 // Owner is the pool of pda_owner, for setups and assertions the app role cannot do.
 func (h *Harness) Owner() *pgxpool.Pool { return h.env.Owner }
 

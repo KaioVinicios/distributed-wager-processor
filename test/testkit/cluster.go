@@ -373,9 +373,38 @@ func (c *Cluster) Kill(tb testing.TB, i int) {
 // Stop ends instance i with SIGTERM and fails tb unless it exits with 0.
 func (c *Cluster) Stop(tb testing.TB, i int) {
 	tb.Helper()
-	if err := c.terminate(c.procs[i]); err != nil {
+	if err := <-c.StopAsync(i); err != nil {
 		tb.Fatalf("instance %d: %v", i, err)
 	}
+}
+
+// StopAsync sends SIGTERM to the current run of instance i and returns at
+// once; the channel receives the result of the stop once the process is gone:
+// nil only for exit code 0 within stopTimeout. R03 and R04 release their lock
+// barrier while the instance stops.
+func (c *Cluster) StopAsync(i int) <-chan error {
+	done := make(chan error, 1)
+	p := c.procs[i]
+	go func() { done <- c.terminate(p) }()
+	return done
+}
+
+// ReadyStatus is the status of GET /health/ready on this instance, or 0 when
+// nothing answers.
+func (n *Instance) ReadyStatus(tb testing.TB) int {
+	tb.Helper()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(tb.Context()), requestTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, n.c.targets[n.i].baseURL+"/health/ready", nil)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	resp, err := n.c.http.Do(req)
+	if err != nil {
+		return 0
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
 }
 
 // Restart stops instance i if it still runs and starts it again with the base
