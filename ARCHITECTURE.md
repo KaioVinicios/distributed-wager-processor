@@ -240,16 +240,19 @@ Detalhes: [`docs/decisions.md`](docs/decisions.md) D-10 e catálogo de códigos 
 - **Os eventos são gravados na outbox na mesma transação** da mudança que os originou. O payload é o envelope completo, serializado uma única vez e **imutável** (trigger).
 - **Publisher (qualquer instância):**
   1. reserva lotes com `FOR UPDATE SKIP LOCKED` e lease de 30 s;
-  2. publica no **SNS FIFO** `wallet-events.fifo` fora da transação;
+  2. publica no **SNS FIFO** `wallet-events.fifo` fora da transação, com os grupos (`walletId`) em paralelo e cada grupo em sequência;
   3. confirma `published_at` só se ainda for o dono do lease;
-  4. em caso de falha, faz backoff de até 5 min sem nunca descartar o evento.
+  4. em caso de falha, **qualquer que seja o erro**, faz backoff `min(1 s × 2^tentativas, 5 min)` e libera o lease, sem nunca descartar o evento.
 
-  Um lease vencido indica trabalho abandonado, e outra instância o reassume.
+  Um lease vencido indica trabalho abandonado, e outra instância o reassume (`outbox_lease_reclaims_total`). Com o banco fora, o claim espera de 1 s a 30 s e tenta de novo; o publisher nunca derruba o processo.
+- **Tópico:** o SNS não resolve tópico pelo nome. No start, o ARN é montado com a conta do `sts:GetCallerIdentity`, a região e o nome, e é verificado com `sns:GetTopicAttributes` (a única permissão extra do serviço). Tópico ausente derruba o start. O SNS não entra no readiness: com o broker fora, o HTTP continua e a outbox acumula.
+- **Stop gracioso:** nenhum claim nem envio novo começa; os envios em andamento terminam e são confirmados, e o resto do lote fica com o lease, reassumido por outra instância.
 - **Nenhuma publicação antes do commit:** o publisher só enxerga linhas confirmadas. Um teste segura uma transação aberta e confirma que nada é publicado.
-- **Recuperação:** um crash entre o commit e a publicação faz o evento ficar pendente até ser publicado. Um crash entre a publicação e a confirmação faz o evento ser **republicado com o mesmo `eventId`** e os mesmos bytes. O SNS FIFO deduplica dentro de 5 min, e os consumidores deduplicam pelo `eventId`.
+- **Recuperação:** um crash entre o commit e a publicação faz o evento ficar pendente até ser publicado. Um crash entre a publicação e a confirmação faz o evento ser **republicado com o mesmo `eventId`** e o mesmo conteúdo (o JSON lido da coluna, nunca reserializado). O SNS FIFO deduplica dentro de 5 min, e os consumidores deduplicam pelo `eventId`.
 - **Eventos:** `WagerTransactionProcessed` (inclusive `LOSS` e `OPENING`), `WagerTransactionRejected`, `WalletBalanceChanged` e `WagerTransactionPendingReference`.
   - Cada evento tem um tipo concreto, e o construtor define o tipo e a versão.
   - O envelope traz `eventId`, `eventType`, `version`, `aggregateId`, `correlationId`, `causationId` (opcional), `occurredAt` (RFC 3339 UTC) e `data` tipado. Os valores monetários vão como strings decimais.
+  - **Contrato formal:** [`api/events.yaml`](api/events.yaml) (schemas OpenAPI 3.0.3). Os testes validam contra ele toda mensagem lida da fila de auditoria, e a verificação de consistência exige que todo evento de cada carteira seja publicado e entregue com o conteúdo do banco.
 - **Contrato de consumo:**
   - a entrega é at-least-once, então o consumidor deduplica pelo `eventId`;
   - o `MessageGroupId` é o `walletId`;
@@ -375,6 +378,8 @@ As métricas Prometheus ficam em `/metrics`, em uma porta administrativa separad
 | `outbox_pending_events` / `outbox_oldest_pending_age_seconds` | gauge | — | Atraso da outbox |
 | `outbox_publish_lag_seconds` | histogram | `event_type` | Atraso da outbox (publicação − ocorrência) |
 | `outbox_published_total` / `outbox_publish_failures_total` / `outbox_lease_reclaims_total` | counter | `event_type` / — | Publicação, retries e recuperação |
+
+As 6 métricas de outbox estão implementadas desde o M4; os gauges são atualizados pelo próprio publisher, no máximo 1×/s. As demais chegam no M7.
 | `reconciliation_runs_total` | counter | `consistent` | Reconciliações |
 | `reconciliation_divergences_total` | counter | — | Divergências de reconciliação |
 | `auth_failures_total` | counter | `reason` (`unauthenticated`, `forbidden`, `provider_mismatch`) | Diagnóstico de acesso |
@@ -461,7 +466,9 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 8. **O `/docs` carrega o Swagger UI por CDN.** Sem internet, é preciso usar o `/openapi.yaml` ou o `api/requests.http`.
 9. **Segredos** do `.env.example` e do realm são valores locais de teste. Não há integração com um gerenciador de segredos nem rotação de credenciais.
 10. **Não há rate limiting** nem cotas por provedor.
-11. **A espera por referências é finita.** Uma reversão cuja referência fique retida além do limite (por exemplo, numa indisponibilidade prolongada da fila) é rejeitada com `REFERENCE_NOT_FOUND`. O limite é configurável (`REFERENCE_MAX_ATTEMPTS`, `REFERENCE_TTL`).
+11. **Um erro permanente do SNS não descarta o evento.** Um tópico apagado ou uma política revogada fazem a outbox acumular (`outbox_oldest_pending_age_seconds` sobe) até a intervenção; nada confirmado se perde.
+12. **Todos os papéis rodam em todas as instâncias** até o M7, quando entram as flags `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED` (D-15).
+13. **A espera por referências é finita.** Uma reversão cuja referência fique retida além do limite (por exemplo, numa indisponibilidade prolongada da fila) é rejeitada com `REFERENCE_NOT_FOUND`. O limite é configurável (`REFERENCE_MAX_ATTEMPTS`, `REFERENCE_TTL`).
 
 *Esta lista é revisada ao fim de cada marco e fechada na entrega.*
 
@@ -469,7 +476,7 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 
 ## 17. Trabalho não concluído
 
-*Preenchido na entrega.* Estado em 29/09/2026: **M0 a M3 concluídos**. O M0 entregou o esqueleto Fx, health, métricas, compose com 3 réplicas, Keycloak provisionado, MiniStack com IAM aplicado e tooling de qualidade. O M1 entregou o domínio (Money, carteira e ledger, máquina de estados, regras por tipo, referências, hash e idempotência, eventos) e o vocabulário de erros, com a tabela U do test-plan verde. O M2 entregou a persistência: migrations com todas as constraints, triggers e grants, o Unit of Work e os repositórios, provados contra o PostgreSQL real, inclusive todos os fluxos do domínio gravados de ponta a ponta. O M3 entregou o contrato (`api/openapi.yaml`), os casos de uso, a autenticação com o Keycloak real e as 9 rotas, com os testes de autenticação, isolamento, contrato e concorrência em processo. Mensageria (outbox, consumidor SQS e worker de referências) vem no M4–M6. Os diferenciais opcionais (tracing com OpenTelemetry, dashboards, teste de carga e ledger de partidas dobradas) só serão feitos se houver folga ([`docs/implementation-plan.md`](docs/implementation-plan.md) M12).
+*Preenchido na entrega.* Estado em 29/09/2026: **M0 a M4 concluídos**. O M0 entregou o esqueleto Fx, health, métricas, compose com 3 réplicas, Keycloak provisionado, MiniStack com IAM aplicado e tooling de qualidade. O M1 entregou o domínio (Money, carteira e ledger, máquina de estados, regras por tipo, referências, hash e idempotência, eventos) e o vocabulário de erros, com a tabela U do test-plan verde. O M2 entregou a persistência: migrations com todas as constraints, triggers e grants, o Unit of Work e os repositórios, provados contra o PostgreSQL real, inclusive todos os fluxos do domínio gravados de ponta a ponta. O M3 entregou o contrato (`api/openapi.yaml`), os casos de uso, a autenticação com o Keycloak real e as 9 rotas, com os testes de autenticação, isolamento, contrato e concorrência em processo. O M4 entregou o publisher da outbox (claim com lease, SNS FIFO, backoff, recuperação e stop gracioso), o contrato formal dos eventos (`api/events.yaml`) e a verificação de que todo evento é publicado e entregue. O consumidor SQS e o worker de referências vêm no M5–M6. Os diferenciais opcionais (tracing com OpenTelemetry, dashboards, teste de carga e ledger de partidas dobradas) só serão feitos se houver folga ([`docs/implementation-plan.md`](docs/implementation-plan.md) M12).
 
 ---
 

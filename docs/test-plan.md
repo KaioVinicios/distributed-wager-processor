@@ -86,6 +86,8 @@ O isolamento é por banco porque o ledger é append-only e bloqueia `TRUNCATE`. 
 | `SQS_WAIT_TIME` | 20 s | 1 s | 2 s |
 | `OUTBOX_LEASE` | 30 s | 2 s | 3 s |
 | `OUTBOX_POLL_INTERVAL` | 500 ms | 100 ms | 200 ms |
+| `OUTBOX_RETRY_BASE_DELAY` | 1 s | 100 ms | 200 ms |
+| `OUTBOX_RETRY_MAX_DELAY` | 5 min | 1 s | 2 s |
 | `REFERENCE_RETRY_BASE_DELAY` | 1 s | 100 ms | 200 ms |
 | `REFERENCE_MAX_ATTEMPTS` | 8 | 3 | 3 |
 | `REFERENCE_TTL` | 10 min | 3 s | 5 s |
@@ -183,11 +185,13 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | I04d | `TestTransientFailureRedrive`: um dublê do caso de uso devolve erro transitório para um `messageId`; depois de 3 recebimentos a mensagem está na DLQ, via redrive | SQS-07, TST-I05 |
 | I04e | `TestBusinessRejectionDeletesMessage`: um BET sem saldo pelo SQS fica `REJECTED` e a mensagem sai da fila, sem ir para a DLQ | SQS-06 |
 | I04f | `TestBrokerPoliciesEnforced`: aplica os documentos de `deploy/aws/policies/` a usuários IAM criados para o teste, sobre recursos isolados. Verifica o que é permitido (provedor envia; serviço consome, altera visibilidade, envia para a DLQ e publica) e o que é negado com `AccessDenied` (provedor consome ou publica, serviço envia na fila de entrada, usuário sem política faz qualquer coisa) | AUTH-09 |
-| I05a | `TestOutboxConcurrentPublishers`: 2 publishers em processo, cada um com seu pool, e 200 eventos. Todos são publicados, todo `eventId` aparece na fila de auditoria com o payload idêntico ao do banco, e nenhum fica pendente | TST-I05, OUT-03 |
-| I05b | `TestNoPublishBeforeCommit`: o teste abre uma transação, insere na outbox e segura o commit. Em 2 s, nada chega à fila de auditoria; depois do commit, o evento chega | OUT-10, E8 |
-| I05c | `TestOutboxRetryBackoff`: um publisher que falha nas 3 primeiras chamadas e depois delega ao SNS real faz `attempts` chegar a 3, respeita `next_attempt_at` e publica | OUT-04 |
-| I05d | `TestOutboxLeaseRecovery`: um evento com lease vencido é reassumido e `outbox_lease_reclaims_total` é incrementado | OUT-03 |
-| I05e | `TestEventContracts`: os payloads recebidos na fila de auditoria validam contra o contrato de [`messaging.md`](messaging.md) §6 (campos, tipos, omissões) | OUT-08..13 |
+| I05a | `TestOutboxConcurrentPublishers`: 2 publishers em processo, cada um com seu pool, e 200 eventos em 20 grupos. Todos são publicados, todo `eventId` aparece na fila de auditoria com o payload idêntico ao do banco (comparado como JSON), e nenhum fica pendente | TST-I05, OUT-03, OUT-05 |
+| I05b | `TestNoPublishBeforeCommit`: um `uow.Do` insere na outbox e fica bloqueado antes do commit. Em 2 s, nada chega à fila de auditoria; depois do commit, o evento chega. Sensibilidade: um decorador que publica dentro do `Insert` faz o teste falhar | OUT-10, E8 |
+| I05c | `TestOutboxRetryBackoff`: um `Sink` que falha nas 3 primeiras chamadas e depois delega ao SNS real faz `attempts` chegar a 3, respeita `next_attempt_at` (intervalos ≥ `base × 2ⁿ`), grava `last_error` e publica | OUT-04 |
+| I05d | `TestOutboxLeaseRecovery`: um evento com lease vencido é reassumido, publicado e incrementa `outbox_lease_reclaims_total`; um evento com lease válido não é tocado até o lease vencer | OUT-03, OUT-06 |
+| I05e | `TestEventContracts`: pela API, abertura, BET, WIN, LOSS, rejeição e REFUND pendente. Os 4 tipos de evento chegam à fila de auditoria e validam contra [`api/events.yaml`](../api/events.yaml) (campos, tipos, omissões), com `MessageGroupId`, `MessageDeduplicationId` e atributos corretos | OUT-07..13 |
+| I05f | `TestPublisherSurvivesClaimFailures` e `TestOutboxBacklogGauges`: com o banco fora, o publisher espera 1 s, 2 s… e volta a publicar; com o broker fora, `outbox_pending_events` mostra o pendente e volta a zero depois da publicação | OUT-04, OBS-03 |
+| I05g | `TestPublisherStop`: no stop, a publicação em andamento termina e é confirmada, nenhuma outra começa, e o resto do lote fica com o lease; `goleak` limpo | FX-03, OUT-06 |
 | I06 | `TestRecoveryAfterRestart`: app 1 cria uma pendência de referência e para. App 2 sobe com o mesmo banco, a pendência é resolvida e os replays devolvem o resultado original | TST-I06, IDEM-01, OPS-12 |
 | I07a | `TestFxGraph`: `fx.ValidateApp` com todos os módulos | TST-I07, FX-01 |
 | I07b | `TestFxLifecycle`: `fxtest.New` → `Start` → tráfego → `Stop`. Depois do stop, os workers terminaram (logs de fim), o pool está fechado e `goleak.VerifyNone` passa | TST-I07, FX-03..05 |
@@ -202,7 +206,7 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | I15 | `TestOpenAPIContract`: `api/openapi.yaml` passa na validação do kin-openapi, e o conjunto método + path do documento é **idêntico** ao da tabela de rotas do `httpapi`. É unitário (sem infraestrutura), então roda no `go test ./...`. Além disso, todo teste HTTP de integração valida requisição e resposta contra o documento (`testkit/contract.go`) | HTTP-*, DOC-06 |
 | I16 | `TestContextCancellation`: um `context` cancelado, ou com prazo vencido enquanto espera o lock de uma carteira, interrompe a operação no banco (o UoW faz rollback e devolve o erro do `context`, classificado como transitório), sem efeito parcial | DOM-06 |
 | I17 | `TestDomainFlowsPersist`: abertura, BET, WIN (com e sem referência), LOSS, REFUND, ROLLBACK de WIN, rejeição e `PENDING_REFERENCE` → `PROCESSED`, produzidos por `OpenWallet`/`Settle` e gravados pelos repositórios, passam pelos triggers e pela verificação SQL de §6 | WAL-06, LED-05, TX-09 |
-| I18 | `TestWalletRepository`, `TestOutboxRepository`, `TestInboxRepository`, `TestTransactionRepository`, `TestTransactionQueries` e `TestLedgerQueries`: ida e volta idêntica de carteira, transação, lançamento e inbox; não encontrado; `FindReference` com `AlreadyReversed`; antecipação de pendências; paginação e soma do ledger; payload da outbox igual ao envelope serializado; sentinelas das violações de unicidade | DB-01, DB-02, WAL-03, IDEM-02, SQS-03 |
+| I18 | `TestWalletRepository`, `TestOutboxRepository`, `TestInboxRepository`, `TestTransactionRepository`, `TestTransactionQueries` e `TestLedgerQueries`: ida e volta idêntica de carteira, transação, lançamento e inbox; não encontrado; `FindReference` com `AlreadyReversed`; antecipação de pendências; paginação e soma do ledger; payload da outbox igual ao envelope serializado; sentinelas das violações de unicidade. O M4 acrescenta o `TestOutboxStore`: o claim só pega eventos devidos, sem lease vivo e não publicados; dois claims concorrentes pegam conjuntos disjuntos; lease vencido é marcado como reassumido; confirmação e falha só com o dono do lease; `attempts`, agenda, liberação do lease e `last_error`; backlog | DB-01, DB-02, WAL-03, IDEM-02, SQS-03, OUT-03, OUT-04 |
 | I19 | `TestUnitOfWork`: commit, rollback em erro e em `panic`, `lock_timeout` com a carteira travada por outra transação → transitório, `Snapshot` somente leitura | DB-02, CONC-01 (D-09) |
 | I20 | `TestOpenWallet` (`app`): saldo positivo grava carteira v1, `OPENING`, crédito e os 2 eventos; saldo zero grava só a carteira; segunda abertura → `WALLET_ALREADY_EXISTS`; entradas inválidas com código e `field` | HTTP-01, WAL-03 |
 | I21 | `TestProcessWager` (`app`): todos os desfechos, replay com o saldo original, os dois 409, `UNKNOWN_WALLET` sem escrita, antecipação das pendências quando a referência chega e `FAILED` por overflow de crédito | HTTP-06, IDEM-05..08, TX-06 |
@@ -263,7 +267,7 @@ Todos rodam com `cluster.Start(3)`, distribuindo as requisições entre as inst�
 
 ## 6. Verificação de consistência (`testkit.AssertWalletConsistent`)
 
-Registrada automaticamente para toda carteira criada via `testkit`. Executada no `t.Cleanup`, depois de `Eventually` confirmar que não há pendências nem outbox em aberto relacionadas à carteira. Os itens 2–6 são SQL puro, em `testkit.LedgerProblems` (M2), cuja sensibilidade é provada por um teste que grava cada divergência com os triggers desligados; o M3 acrescenta os itens 1 e 7.
+Registrada automaticamente para toda carteira criada via `testkit`. Executada no `t.Cleanup`, depois de `Eventually` confirmar que não há pendências nem outbox em aberto relacionadas à carteira. Os itens 2–6 são SQL puro, em `testkit.LedgerProblems` (M2), cuja sensibilidade é provada por um teste que grava cada divergência com os triggers desligados; o M3 acrescenta os itens 1 e 7, e o M4 o item 8.
 
 1. `POST /wallets/{id}/reconciliation` devolve `consistent: true` e `difference = 0.00`.
 2. SQL direto: `balance_minor == Σ CREDIT − Σ DEBIT`.
@@ -272,6 +276,7 @@ Registrada automaticamente para toda carteira criada via `testkit`. Executada no
 5. Não existem lançamentos para transações `REJECTED`, `FAILED`, `PENDING_REFERENCE` ou `LOSS`.
 6. Cada transação `PROCESSED` com movimento tem exatamente 1 lançamento.
 7. Toda transação terminal tem exatamente os eventos da matriz do lifecycle §7 na outbox (`testkit.OutboxProblems`, SQL, com teste de sensibilidade como o do `LedgerProblems`).
+8. **Outbox publicada e entregue:** nenhum evento da carteira fica sem `published_at` (espera com prazo), e cada `eventId` chegou à fila de auditoria com o conteúdo igual ao da coluna `payload`, comparado como JSON e validado contra `api/events.yaml`.
 
 ---
 

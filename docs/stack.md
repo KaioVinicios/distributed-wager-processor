@@ -58,6 +58,7 @@ Versões verificadas no proxy do Go e nos registros de imagens em **28/09/2026**
 | `github.com/aws/aws-sdk-go-v2/config` | v1.33.6 | Configuração, endpoint e credenciais |
 | `github.com/aws/aws-sdk-go-v2/service/sqs` | v1.52.1 | Consumidor e DLQ |
 | `github.com/aws/aws-sdk-go-v2/service/sns` | v1.47.2 | Publicação da outbox |
+| `github.com/aws/aws-sdk-go-v2/service/sts` | v1.51.1 | `GetCallerIdentity`, para montar o ARN do tópico (M4; já era indireta) |
 | `github.com/prometheus/client_golang` | v1.24.1 | Métricas |
 | `github.com/google/uuid` | v1.6.0 | UUIDv7 |
 | `github.com/caarlos0/env/v11` | v11.4.1 | Leitura da configuração a partir do ambiente |

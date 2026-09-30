@@ -55,7 +55,7 @@ O MiniStack roda com `AUTH=true` e **avalia** as políticas (D-02, [`dev/spike-m
 | `user/provider-a`, `user/provider-b` | Identidade | `sqs:SendMessage`, `sqs:GetQueueUrl` | `wager-transactions.fifo` |
 | `user/pda-wallet-service` | Identidade | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility`, `sqs:GetQueueAttributes`, `sqs:GetQueueUrl` | `wager-transactions.fifo` |
 | `user/pda-wallet-service` | Identidade | `sqs:SendMessage`, `sqs:GetQueueAttributes`, `sqs:GetQueueUrl` | `wager-transactions-dlq.fifo` |
-| `user/pda-wallet-service` | Identidade | `sns:Publish` | `wallet-events.fifo` |
+| `user/pda-wallet-service` | Identidade | `sns:Publish`, `sns:GetTopicAttributes` (verificação do tópico no start, §5.2) | `wallet-events.fifo` |
 | `sns.amazonaws.com` (condição `aws:SourceArn = <topic-arn>`) | Recurso (fila) | `sqs:SendMessage` | `wallet-events-audit.fifo` |
 
 Tudo o que não está na tabela é negado implicitamente. Por exemplo: provedor consumindo ou publicando no tópico, serviço enviando na fila de entrada, qualquer principal criando ou apagando recursos.
@@ -74,7 +74,7 @@ Exemplo, a política de identidade de `pda-wallet-service` (`deploy/aws/policies
       "Action": ["sqs:SendMessage","sqs:GetQueueAttributes","sqs:GetQueueUrl"],
       "Resource": "<dlq-arn>" },
     { "Sid": "PublishEvents", "Effect": "Allow",
-      "Action": "sns:Publish", "Resource": "<topic-arn>" }
+      "Action": ["sns:Publish","sns:GetTopicAttributes"], "Resource": "<topic-arn>" }
   ]
 }
 ```
@@ -226,17 +226,18 @@ Em nenhum desses caminhos uma mensagem é removida sem commit. Um `SIGKILL` no m
 | Lease | 30 s | `OUTBOX_LEASE` |
 | Intervalo de varredura quando ocioso | 500 ms (sem espera se o lote veio cheio) | `OUTBOX_POLL_INTERVAL` |
 | Publicações simultâneas | 8 (grupos em paralelo, eventos do mesmo grupo em sequência) | `OUTBOX_CONCURRENCY` |
-| Backoff por evento | `min(1s × 2^attempts, 5 min)` | `OUTBOX_RETRY_MAX_DELAY` |
-| Identidade da instância | `hostname-pid-uuid` | — (usado em `locked_by`) |
+| Backoff por evento | `min(base × 2^attempts, máx)`, com `attempts` antes da falha: 1 s, 2 s, 4 s… até 5 min | `OUTBOX_RETRY_BASE_DELAY` (1 s), `OUTBOX_RETRY_MAX_DELAY` (5 min) |
+| Timeout de cada `Publish` | `lease / 2`, desacoplado do cancelamento do loop | — |
+| Identidade da instância | `hostname-pid-<8 hex>` | — (usado em `locked_by`) |
 
-O algoritmo de claim, publicação e confirmação está em [`data-model.md`](data-model.md) §6 e em D-13.
+O algoritmo de claim, publicação, confirmação e falha está em [`data-model.md`](data-model.md) §6 e em D-13. **Todo erro do `Publish`** segue o caminho de falha (`attempts++`, backoff e lease liberado): um evento confirmado nunca é descartado.
 
 ### 5.2 Mapeamento para o SNS
 
 | Parâmetro do `Publish` | Valor |
 | --- | --- |
-| `TopicArn` | `wallet-events.fifo` |
-| `Message` | Coluna `payload`: os **bytes** do envelope, enviados sem nenhuma reserialização |
+| `TopicArn` | Resolvido no start: `sts:GetCallerIdentity` dá partição e conta, o ARN é `arn:<partição>:sns:<AWS_REGION>:<conta>:<SNS_EVENTS_TOPIC_NAME>` e é verificado com `sns:GetTopicAttributes`. Se falhar, a aplicação não sobe |
+| `Message` | Coluna `payload`: o JSON lido da coluna, enviado sem nenhuma reserialização (o `JSONB` normaliza o texto na gravação, então ele é idêntico em toda republicação) |
 | `MessageGroupId` | Coluna `message_group_id`, sempre o `walletId` |
 | `MessageDeduplicationId` | `event_id` |
 | `MessageAttributes` | `eventType` (String), `eventVersion` (Number), `correlationId` (String) |
@@ -247,15 +248,18 @@ O algoritmo de claim, publicação e confirmação está em [`data-model.md`](da
 | --- | --- | --- |
 | Entre o commit do domínio e o claim | O evento fica pendente no banco | Qualquer publisher o encontra na próxima varredura |
 | Entre o claim e o `Publish` | O lease vence (30 s) | Outro publisher, ou a mesma instância reiniciada, reassume o evento |
-| Entre o `Publish` e a confirmação | O lease vence e o evento é **republicado** com o mesmo `eventId` e os mesmos bytes | Dentro de 5 min, o SNS FIFO deduplica. Depois disso, o consumidor deduplica pelo `eventId` |
+| Entre o `Publish` e a confirmação | O lease vence e o evento é **republicado** com o mesmo `eventId` e o mesmo conteúdo | Dentro de 5 min, o SNS FIFO deduplica. Depois disso, o consumidor deduplica pelo `eventId` |
 | SNS indisponível | `attempts++`, backoff e lease liberado | O evento nunca é descartado, e `outbox_oldest_pending_age_seconds` sobe |
 | PostgreSQL indisponível | A varredura falha | O publisher tenta de novo com backoff de 1 s a 30 s |
+| Shutdown gracioso (`SIGTERM`) | Nenhum claim nem `Publish` novo começa; os `Publish` em andamento terminam e são confirmados | Os eventos reservados que não começaram ficam com o lease, que vence e é reassumido |
 
 **Garantia E8:** o publisher só enxerga linhas **confirmadas**, porque roda em outra transação sob `READ COMMITTED`. Por isso não há publicação antes do commit. Um teste de integração dedicado comprova isso (`test-plan.md`, TST-I05b).
 
 ---
 
 ## 6. Contratos dos eventos de saída
+
+**Contrato formal:** [`api/events.yaml`](../api/events.yaml) (OpenAPI 3.0.3, só schemas). O corpo valida contra `Envelope`, e `data` valida contra `<eventType>V<version>`. Os testes validam toda mensagem recebida na fila de auditoria contra ele. Esta seção explica as regras; em caso de dúvida, vale o arquivo.
 
 ### 6.1 Envelope
 

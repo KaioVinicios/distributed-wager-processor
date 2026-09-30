@@ -15,7 +15,8 @@ pda/
 ├── api/                                    # contrato HTTP (D-20)
 │   ├── openapi.yaml                        # OpenAPI 3.0.3 design-first: fonte única do contrato (M3)
 │   ├── swagger.html                        # página do Swagger UI (swagger-ui-dist 5.33.0 via CDN)
-│   ├── embed.go                            # package api: //go:embed openapi.yaml swagger.html
+│   ├── events.yaml                         # contrato formal dos eventos de saída: envelope + 4 eventos v1 (M4)
+│   ├── embed.go                            # package api: //go:embed openapi.yaml swagger.html events.yaml
 │   └── requests.http                       # coleção REST Client / JetBrains HTTP Client
 │
 ├── cmd/
@@ -87,7 +88,7 @@ pda/
 │   │   └── classify_test.go                # U09a
 │   │
 │   ├── app/                                # casos de uso + portas (SEM fx, net/http, aws, pgx)
-│   │   ├── ports.go                        # UnitOfWork, Repos, WalletRepo... (M2); Clock, IDGenerator, Metrics (M3)
+│   │   ├── ports.go                        # UnitOfWork, Repos, WalletRepo... (M2); Clock, IDGenerator, Metrics (M3); OutboxStore (M4)
 │   │   ├── errors.go                       # sentinelas (M2) + domainError: erro do domínio → Kind (M3)
 │   │   ├── system.go                       # SystemClock e UUIDv7 (implementações padrão das portas)
 │   │   ├── seal.go                         # sealEvents: eventos do domínio → envelopes com eventId
@@ -117,7 +118,7 @@ pda/
 │   │   │   ├── transaction_repo.go
 │   │   │   ├── ledger_repo.go
 │   │   │   ├── inbox_repo.go
-│   │   │   ├── outbox_repo.go              # insert + claim/ack/fail (usado pelo publisher)
+│   │   │   ├── outbox_repo.go              # insert (UoW) + OutboxStore: claim/ack/fail/backlog no pool (publisher)
 │   │   │   ├── money_mapping.go            # Money ↔ (BIGINT, CHAR(3))
 │   │   │   ├── errors.go                   # SQLSTATE / constraint → apperrors.Kind (U09b)
 │   │   │   ├── module.go
@@ -139,7 +140,8 @@ pda/
 │   │   ├── awsclient/
 │   │   │   ├── config.go                   # aws.Config pela cadeia padrão do SDK (AWS_ENDPOINT_URL, AWS_PROFILE...)
 │   │   │   ├── queues.go                   # resolve e verifica fila e DLQ no OnStart; checker `sqs`
-│   │   │   └── module.go                   # Provide de *sqs.Client e *sns.Client
+│   │   │   ├── topic.go                    # ARN do tópico via STS + GetTopicAttributes no OnStart (M4)
+│   │   │   └── module.go                   # Provide de *sqs.Client, *sns.Client, *sts.Client, *Queues e *Topic
 │   │   ├── sqsconsumer/
 │   │   │   ├── consumer.go                 # lifecycle, pollers, semáforo, shutdown em 5 passos
 │   │   │   ├── batch.go                    # agrupamento por MessageGroupId
@@ -150,10 +152,11 @@ pda/
 │   │   │   ├── module.go
 │   │   │   └── *_test.go / *_integration_test.go
 │   │   ├── outbox/
-│   │   │   ├── publisher.go                # loop claim → publish → ack/fail, lease
+│   │   │   ├── publisher.go                # loop claim → publish → ack/fail, lease; portas Sink e Metrics
+│   │   │   ├── backoff.go                  # retryDelay (base × 2^attempts, teto) e truncateError
 │   │   │   ├── sns_sink.go                 # Publish no SNS FIFO (atributos, group, dedup)
-│   │   │   ├── module.go
-│   │   │   └── *_integration_test.go
+│   │   │   ├── module.go                   # identidade da instância + lifecycle do loop
+│   │   │   └── *_test.go / *_integration_test.go
 │   │   └── references/
 │   │       ├── worker.go                   # loop de claim + app.ResolveReferences
 │   │       ├── module.go
@@ -200,8 +203,8 @@ pda/
 │
 ├── test/
 │   ├── testkit/                            # utilitários compartilhados (sem build tag)
-│   │   ├── env.go                          # NewEnv: banco isolado por pacote (M2); filas e tópico entram pelo app e pelo M4
-│   │   ├── app.go                          # StartApp: Fx em processo com filas isoladas, logs capturados e cliente por identidade (M3)
+│   │   ├── env.go                          # NewEnv: banco isolado por pacote (M2); NewTestEnv: banco de um teste só (M4)
+│   │   ├── app.go                          # StartApp: Fx em processo com filas e tópico isolados, logs capturados, cliente por identidade e Audit
 │   │   ├── root.go                         # RepoRoot: raiz do módulo (go.mod)
 │   │   ├── dotenv.go                       # lê .env.example (+ .env) para os testes
 │   │   ├── awscreds.go                     # lê .local/aws/credentials (profiles IAM do aws-init)
@@ -211,8 +214,11 @@ pda/
 │   │   ├── auth.go                         # tokens reais e forjados
 │   │   ├── api.go                          # cliente HTTP tipado
 │   │   ├── contract.go                     # validação de req/resp contra api/openapi.yaml (kin-openapi)
+│   │   ├── event_contract.go               # validação dos eventos contra api/events.yaml (M4)
+│   │   ├── events.go                       # tópico + fila de auditoria isolados, com policy e assinatura raw (M4)
+│   │   ├── audit.go                        # coletor da fila de auditoria: WaitFor por eventId, todas as entregas (M4)
 │   │   ├── sqs.go                          # envio de mensagens, leitura de DLQ e auditoria
-│   │   ├── assert.go                       # AssertWalletConsistent (test-plan §6), OutboxProblems, SnapshotCounts, Eventually
+│   │   ├── assert.go                       # AssertWalletConsistent (test-plan §6, itens 1–8), OutboxProblems, OutboxPayloads, SnapshotCounts, Eventually
 │   │   └── cluster.go                      # N processos do binário (e2e)
 │   ├── integration/                        # //go:build integration — cenários entre componentes
 │   ├── e2e/                                # //go:build e2e — multi-instância, falhas, resiliência
@@ -300,7 +306,7 @@ flowchart TD
 | `config` | `config/module.go` | `config.Config` (validada) | — |
 | `observability` | `observability/module.go` | `*slog.Logger`, `*Metrics`, `*Health` | Servidor admin: `OnStart`/`OnStop` |
 | `postgres` | `adapters/postgres/module.go` | `*pgxpool.Pool`, repositórios (sobre o pool, para leituras) e `app.UnitOfWork` (que instancia os mesmos repositórios sobre a `pgx.Tx`) | Ping no `OnStart`; `Close` no `OnStop`, depois de todos que o usam |
-| `aws` | `adapters/awsclient/module.go` | `*sqs.Client`, `*sns.Client` | Verificação da fila, da DLQ e do tópico no `OnStart` (fail fast) |
+| `aws` | `adapters/awsclient/module.go` | `*sqs.Client`, `*sns.Client`, `*sts.Client`, `*Queues`, `*Topic` | Verificação da fila, da DLQ e do tópico no `OnStart` (fail fast) |
 | `auth` | `auth/module.go` | `*auth.Verifier`, `auth.Policy` | Busca inicial do JWKS no `OnStart` (fail fast) |
 | `app` | `bootstrap/app_module.go` | Casos de uso | — |
 | `httpapi` | `adapters/httpapi/module.go` | `*http.Server` | `ListenAndServe` / `Shutdown` |

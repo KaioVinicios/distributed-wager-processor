@@ -358,6 +358,15 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
   3. **Confirmação:** `published_at = now()` somente onde `locked_by = eu`.
   4. **Falha:** `attempts++`, `next_attempt_at` com backoff limitado a 5 min e liberação do lease. Nenhum evento é descartado.
   5. **Trabalho abandonado:** um lease expirado é reassumido por outra instância.
+  6. **Detalhes (M4, spec [`dev/specs/2026-09-29-m4-outbox-publisher-design.md`](dev/specs/2026-09-29-m4-outbox-publisher-design.md)):**
+     - o backoff é `min(OUTBOX_RETRY_BASE_DELAY × 2^attempts, OUTBOX_RETRY_MAX_DELAY)`, calculado em Go com o `attempts` de antes da falha;
+     - **todo** erro do `Publish` segue o caminho de falha, sem distinguir transitório de permanente, porque nada confirmado é descartado;
+     - cada `Publish` tem timeout de `lease / 2`;
+     - dentro do lote, os grupos (`walletId`) rodam em paralelo e cada grupo em sequência; uma falha não segura os eventos seguintes do grupo;
+     - no shutdown gracioso, nenhum claim nem `Publish` novo começa, e os envios em andamento terminam e são confirmados;
+     - os gauges de backlog são atualizados pelo publisher, no máximo 1×/s.
+- **Tópico:** o ARN é resolvido no start. `sts:GetCallerIdentity` dá a partição e a conta, o ARN é montado com `AWS_REGION` e `SNS_EVENTS_TOPIC_NAME`, e `sns:GetTopicAttributes` confirma que o tópico existe (fail fast). A política do serviço ganha `sns:GetTopicAttributes` no recurso do tópico. O SNS não entra no readiness: com o broker fora, o HTTP continua e a outbox acumula.
+- **Contrato formal:** [`api/events.yaml`](../api/events.yaml) define o envelope e os 4 eventos v1 com `additionalProperties: false`. Os testes validam contra ele toda mensagem lida da fila de auditoria.
 - **Garantias:**
   - A entrega é at-least-once e o `eventId` é preservado nas republicações.
   - Os consumidores devem deduplicar por `eventId` e ordenar por `walletVersion`.
@@ -391,6 +400,7 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
   3. o publisher da outbox e o worker de referências são encerrados;
   4. por último, o pool do PostgreSQL e os clientes AWS são fechados.
 - **Workers:** cada um recebe um `context` cancelável e um `sync.WaitGroup`. O `OnStop` cancela e espera até o prazo, registrando em log o início e o fim.
+- **Entrega das flags de papel:** as quatro flags entram juntas no M7 (FX-*), porque excluir um módulo do grafo exige que o `bootstrap.Options()` conheça a configuração antes de montar o grafo. Até lá, todos os papéis rodam em todas as instâncias.
 - **Compose:** o serviço `app` roda com 3 réplicas (`app-1`, `app-2`, `app-3`), cada uma com seu pool e sua memória. Portas no host: API em `8081`, `8082` e `8083`, métricas em `9091`, `9092` e `9093`, e Keycloak em `8080`.
 - **Arquitetura verificável:** um teste garante que o pacote `domain` não importa `fx`, `net/http`, `aws` nem `pgx`.
 

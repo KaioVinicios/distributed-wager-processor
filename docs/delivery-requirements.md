@@ -228,15 +228,15 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 ## 13. Transactional outbox e eventos (§5.4, §6.5, §11)
 
 - [x] **OUT-01** Tabela de outbox com: identidade estável do evento, agregado, tipo, payload (snapshot imutável), `occurredAt`, tentativas, próximo envio e `publishedAt`. *(M2, 29/09: `TestOutboxRepository`, `TestGuardTriggers` (`PDA05`), `TestConstraints`.)*
-- [ ] **OUT-02** ⛔ Os registros de outbox são gravados atomicamente com o estado da operação, o saldo, o ledger e a inbox.
-- [ ] **OUT-03** ⛔ Um worker separado publica a outbox e suporta múltiplos publishers, disputa por registros (ex.: `FOR UPDATE SKIP LOCKED` + lease) e recuperação de trabalho abandonado.
-- [ ] **OUT-04** Retry com backoff em falha de publicação.
-- [ ] **OUT-05** Republicações preservam o `eventId`.
-- [ ] **OUT-06** Recuperação demonstrada em dois cenários: (a) interrupção entre o commit e a publicação; (b) interrupção entre a publicação e a confirmação na outbox. Os eventos pendentes são assumidos por outra instância.
-- [ ] **OUT-07** O destino dos eventos de saída está provisionado e os contratos de roteamento e consumo estão documentados.
+- [~] **OUT-02** ⛔ Os registros de outbox são gravados atomicamente com o estado da operação, o saldo, o ledger e a inbox. *(M4, 29/09: outbox na mesma UoW do domínio desde o M3 (I03a `TestFinancialAtomicity`); só linhas confirmadas são publicadas (I05b `TestNoPublishBeforeCommit`). Falta a inbox (M5).)*
+- [x] **OUT-03** ⛔ Um worker separado publica a outbox e suporta múltiplos publishers, disputa por registros (ex.: `FOR UPDATE SKIP LOCKED` + lease) e recuperação de trabalho abandonado. *(M4, 29/09: I05a `TestOutboxConcurrentPublishers` (2 publishers com pools próprios, 200 eventos); `TestOutboxStore` (claims concorrentes disjuntos, lease vencido reassumido); I05d `TestOutboxLeaseRecovery`. Com 3 processos no M8 (C06).)*
+- [x] **OUT-04** Retry com backoff em falha de publicação. *(M4, 29/09: I05c `TestOutboxRetryBackoff`; `TestRetryDelay`; `TestPublisherSurvivesClaimFailures`; `TestOutboxBacklogGauges`.)*
+- [x] **OUT-05** Republicações preservam o `eventId`. *(M4, 29/09: `TestSNSSinkPublishInput` (payload da coluna, `MessageDeduplicationId = eventId`); I05a (conteúdo igual ao do banco); I05d (evento reassumido publicado com o mesmo `eventId`).)*
+- [~] **OUT-06** Recuperação demonstrada em dois cenários: (a) interrupção entre o commit e a publicação; (b) interrupção entre a publicação e a confirmação na outbox. Os eventos pendentes são assumidos por outra instância. *(M4, 29/09: lease vencido reassumido e republicado (I05d); stop gracioso confirma o que está em voo e deixa o resto com o lease (`TestPublisherStop`). Os cenários com processo interrompido são o C05c e o C06 do M8.)*
+- [x] **OUT-07** O destino dos eventos de saída está provisionado e os contratos de roteamento e consumo estão documentados. *(M4, 29/09: `api/events.yaml` + messaging §5.2/§7; I05e `TestEventContracts`; `TestResolveTopic`; `TestFxFailFast` (tópico inexistente); `TestProvisioning`.)*
 - [x] **OUT-08** Tipos concretos para `WagerTransactionProcessed`, `WagerTransactionRejected`, `WalletBalanceChanged` e `WagerTransactionPendingReference`. *(M1, 29/09: `TestEventConstructors`, `TestSeal`, `TestEnvelopeJSON`.)*
 - [x] **OUT-09** Envelope com `eventId`, `eventType`, `aggregateId`, `correlationId`, `causationId` (opcional), `occurredAt`, `version` e `data` tipado. Tipo e versão são definidos pelo construtor do evento. *(M1, 29/09: `TestSeal`, `TestEnvelopeJSON`.)*
-- [ ] **OUT-10** ⛔ Nenhum evento é publicado antes do commit da transação que o originou.
+- [x] **OUT-10** ⛔ Nenhum evento é publicado antes do commit da transação que o originou. *(M4, 29/09: I05b `TestNoPublishBeforeCommit`, com sensibilidade (publicar dentro da transação faz o teste falhar).)*
 - [x] **OUT-11** O payload de `WalletBalanceChanged` inclui `walletId`, `transactionId`, `direction`, `money`, `balanceBefore`, `balanceAfter` e `walletVersion`. *(M1, 29/09: `TestEnvelopeJSON`.)*
 - [x] **OUT-12** Timestamps em UTC RFC 3339 e valores monetários como strings decimais. *(M1, 29/09: `TestEnvelopeJSON`.)*
 - [x] **OUT-13** Eventos de origem interna (`OPENING`) não exigem os metadados externos inaplicáveis. *(M1, 29/09: `TestEnvelopeJSON`, `TestOpening`.)*
@@ -255,9 +255,9 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 15. Composição e ciclo de vida com Uber Fx (§4)
 
-- [~] **FX-01** Configuração, conexões, repositórios, casos de uso, handlers e workers compostos com `fx.Module`, `fx.Provide` e `fx.Invoke`, com injeção por construtor. *(M0, 29/09: M0: `config`, `observability`, `postgres`, `aws` e `httpapi` com `fx.Module`/`Provide`/`Invoke`; I07a `TestFxGraph`. Completa no M3–M6.)* *(M3, 29/09: `TestFxGraph` com `auth`, `app` e o `httpapi` completo. Workers nos M4–M6.)*
+- [~] **FX-01** Configuração, conexões, repositórios, casos de uso, handlers e workers compostos com `fx.Module`, `fx.Provide` e `fx.Invoke`, com injeção por construtor. *(M0, 29/09: M0: `config`, `observability`, `postgres`, `aws` e `httpapi` com `fx.Module`/`Provide`/`Invoke`; I07a `TestFxGraph`. Completa no M3–M6.)* *(M3, 29/09: `TestFxGraph` com `auth`, `app` e o `httpapi` completo. Workers nos M4–M6.)* *(M4, 29/09: `TestFxGraph` com `OutboxStore`, `Topic` e `outbox.Publisher`.)*
 - [x] **FX-02** A inicialização valida a configuração e as dependências (fail fast). *(M0, 29/09: I07c `TestFxFailFast` (banco inacessível, fila inexistente, config inválida); `config_test`; `ServeOnLifecycle` com porta ocupada.)*
-- [ ] **FX-03** Workers com cancelamento, prazos de execução e término observável.
+- [~] **FX-03** Workers com cancelamento, prazos de execução e término observável. *(M4, 29/09: publisher com `OnStop` que cancela e espera, logs de início e fim: `TestPublisherStop`, I07b `TestFxLifecycle` (goleak). Consumidor e worker de referências no M5–M6.)*
 - [ ] **FX-04** O shutdown interrompe novas entradas e conclui ou libera o trabalho em andamento.
 - [ ] **FX-05** As dependências (pool do PostgreSQL, clientes) só são fechadas depois dos componentes que as usam.
 
@@ -267,7 +267,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 - [ ] **OBS-01** Logs em JSON com `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId`, quando disponíveis.
 - [~] **OBS-02** Logs sem credenciais, dados sensíveis ou payloads financeiros completos. *(M3, 29/09: `TestEdgeAccessLog` (sem token), `problem+json` sem ecoar valores. A prova completa é o I14 (M7).)*
-- [ ] **OBS-03** Métricas de: resultados por status, duplicatas, retries, DLQ, conflitos de concorrência, atraso da outbox, latência de processamento e divergências de reconciliação.
+- [~] **OBS-03** Métricas de: resultados por status, duplicatas, retries, DLQ, conflitos de concorrência, atraso da outbox, latência de processamento e divergências de reconciliação. *(M4, 29/09: as 6 métricas de outbox: `TestMetrics_Outbox`, `TestOutboxBacklogGauges`, I05c, I05d. O resto do catálogo vem no M7.)*
 - [x] **OBS-04** Health checks (HTTP-08). *(M0, 29/09: ver HTTP-08.)*
 - [ ] **OBS-05** ⭐ Tracing com OpenTelemetry e dashboards.
 
@@ -290,7 +290,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [ ] **TST-I02** Constraints e imutabilidade do ledger.
 - [x] **TST-I03** Atomicidade financeira. *(M3, 29/09: I03a `TestFinancialAtomicity` (M2) e I03b `TestPermanentFailureRecorded` (`FAILED` em UoW separada, replay com 500).)*
 - [ ] **TST-I04** Inbox e reentrega.
-- [ ] **TST-I05** Outbox concorrente, retry e DLQ.
+- [~] **TST-I05** Outbox concorrente, retry e DLQ. *(M4, 29/09: I05a–g. A DLQ vem no M5.)*
 - [ ] **TST-I06** Recuperação após reinicialização.
 - [ ] **TST-I07** Composição Fx: validação do grafo, start e stop, e liberação dos recursos dos workers (sem goroutines vazadas).
 

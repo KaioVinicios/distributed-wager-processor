@@ -98,14 +98,20 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 
 ### Dia 2 — 30/09 (qua): mensageria, workers e multi-instância
 
-#### M4 — Outbox publisher (~2,5 h)
+#### M4 — Outbox publisher (~2,5 h) — ✅ concluído em 29/09
 
 - Adapter `outbox`: o `OutboxRepository` do M2 ganha claim com `SKIP LOCKED` + lease (o payload é `JSONB`: o publisher envia o JSON lido da coluna, idêntico em toda republicação), publicação no SNS FIFO, confirmação condicional, backoff, recuperação de lease e métricas de atraso.
 - `testkit`: criação de tópico e fila de auditoria isolados, e leitura da fila de auditoria filtrando por id.
 - Testes I05a–e.
 - **Pronto desde o M3:** o `app` sela os envelopes (`eventId` UUIDv7) e os grava na outbox na mesma transação. O publisher só lê, publica e confirma.
 
-**Cobre:** OUT-*, ART-06 (parcial). **Eliminatório: E8.**
+- **Entregue também:**
+  - o contrato formal dos eventos (`api/events.yaml`), validado em toda mensagem lida da fila de auditoria;
+  - o item 8 da verificação de consistência: todo evento de cada carteira publicado e entregue com o conteúdo do banco;
+  - `testkit.Eventually`, `testkit.NewTestEnv`, `TestAuditCollector` e o ARN do tópico resolvido no start (STS + `GetTopicAttributes`).
+- **Achado da validação do plano:** os testes do `bootstrap` usavam o banco compartilhado `pda`; com o publisher no grafo, publicavam os eventos pendentes do ambiente de desenvolvimento num tópico de teste. Eles passaram a ter banco próprio (spec, decisão 20).
+
+**Cobre:** OUT-03, OUT-04, OUT-05, OUT-07, OUT-10; parciais: OUT-02 (inbox no M5), OUT-06 (C05c/C06 no M8), TST-I05 (DLQ no M5), OBS-03, FX-01, FX-03. **Eliminatório: E8.** Spec: [`dev/specs/2026-09-29-m4-outbox-publisher-design.md`](dev/specs/2026-09-29-m4-outbox-publisher-design.md) · plano: [`dev/plans/2026-09-29-m4-outbox-publisher.md`](dev/plans/2026-09-29-m4-outbox-publisher.md).
 
 #### M5 — Consumidor SQS (~3 h)
 
@@ -205,6 +211,8 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | ~~Corrida entre as duas leituras de idempotência~~ | 409 indevido com a mesma chave | ✅ Tratado no M3: a transação da mesma chave é replay (I22, C01a) |
 | ~~Domínio e schema divergirem (ordem de escrita, coerência ledger × transação)~~ | `PDA04` nos fluxos reais | ✅ Descartado no M2: o I17 grava todos os tipos pelo caminho real e passa pelos triggers |
 | Payload da outbox comparado byte a byte | Republicação "diferente" do `MarshalJSON` | `JSONB` normaliza o texto; o contrato é o JSON lido da coluna (data-model §3.5), e os testes comparam como JSON |
+| ~~`time.Duration` codificado como `interval` no pgx~~ | Erro no claim ou na falha | ✅ Descartado no M4: o pgx codifica sem ajuste (`TestOutboxStore`) |
+| ~~Testes publicando os eventos do ambiente de desenvolvimento~~ | Eventos do banco `pda` somem da auditoria | ✅ Tratado no M4: todo teste que sobe o publisher tem banco próprio |
 | Estouro de prazo | Checkpoint do dia não atingido | Ordem de corte (§4), sempre preservando os eliminatórios |
 
 ---
@@ -220,6 +228,6 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | E5 Movimentação duplicada | M3 ✅ (HTTP) + M5 | M3 (C01a em processo, I22), M5 (I04a), M8 (C01, C05, C10) |
 | E6 Idempotência só em memória | M2 ✅ (índices únicos) + M3 ✅ | M2 (I02a, I18), M3 (I10, I21), M6 (I06), M8 (C08) |
 | E7 Dependência de instância única | M3–M6 | M8 (cluster com 3 processos) |
-| E8 Publicação antes do commit | M4 | M4 (I05b) |
+| E8 Publicação antes do commit | M4 ✅ | M4 (I05b) |
 | E9 Ledger auditável | M2 ✅ | M2 (I02b, I02c, I17 com `LedgerProblems`) + test-plan §6 |
 | E10 Mocks no lugar da infraestrutura | M0 (infraestrutura real) | Todos os marcos com testes de integração e e2e |

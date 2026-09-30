@@ -605,7 +605,7 @@ UPDATE outbox_events o
 SET locked_by = $2, locked_until = now() + $3::interval
 FROM due WHERE o.event_id = due.event_id
 RETURNING o.event_id, o.message_group_id, o.event_type, o.event_version,
-          o.correlation_id, o.payload, due.previous_owner;
+          o.correlation_id, o.payload, o.occurred_at, o.attempts, due.previous_owner;
 ```
 `previous_owner` preenchido indica trabalho abandonado reassumido (lease vencido), contado em `outbox_lease_reclaims_total`. Em uma falha de publicação, o lease é liberado (`locked_by = NULL`), então esse caso não conta como abandono.
 
@@ -613,9 +613,24 @@ RETURNING o.event_id, o.message_group_id, o.event_type, o.event_version,
 ```sql
 UPDATE outbox_events
 SET published_at = now(), locked_by = NULL, locked_until = NULL
-WHERE event_id = $1 AND locked_by = $2 AND published_at IS NULL;
+WHERE event_id = $1 AND locked_by = $2 AND published_at IS NULL
+RETURNING published_at;   -- published_at − occurred_at alimenta outbox_publish_lag_seconds
 ```
 Se o lease expirou e outra instância já confirmou, a atualização afeta 0 linhas e o caso é apenas registrado em log. O evento foi publicado duas vezes com o mesmo `eventId`, o que o contrato at-least-once aceita.
+
+**Falha de publicação:** `$3` é o backoff calculado pelo publisher a partir do `attempts` devolvido pelo claim ([`messaging.md`](messaging.md) §5.1), e `$4` é a mensagem do erro truncada em 1 KB, nunca o payload.
+```sql
+UPDATE outbox_events
+SET attempts = attempts + 1, next_attempt_at = now() + $3::interval,
+    locked_by = NULL, locked_until = NULL, last_error = $4
+WHERE event_id = $1 AND locked_by = $2 AND published_at IS NULL;
+```
+
+**Backlog da outbox** (gauges `outbox_pending_events` e `outbox_oldest_pending_age_seconds`), usando o índice parcial `outbox_due_idx`:
+```sql
+SELECT count(*), COALESCE(GREATEST(EXTRACT(EPOCH FROM now() - min(occurred_at)), 0), 0)
+FROM outbox_events WHERE published_at IS NULL;
+```
 
 **Claim de referências pendentes (D-11):** a busca por `status = 'PENDING_REFERENCE' AND next_attempt_at <= now()` usa `FOR UPDATE SKIP LOCKED LIMIT $1`. Cada linha é processada na sua própria transação, que também trava a carteira. Para evitar deadlock com o caminho HTTP, que trava primeiro a carteira e depois a transação, o worker:
 1. apenas **seleciona os IDs** com `SKIP LOCKED` e sai da transação;
