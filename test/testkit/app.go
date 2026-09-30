@@ -4,41 +4,24 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/service/sns"
-	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"go.uber.org/fx"
 
-	"github.com/KaioVinicios/pda/internal/adapters/awsclient"
 	"github.com/KaioVinicios/pda/internal/bootstrap"
 	"github.com/KaioVinicios/pda/internal/config"
 	"github.com/KaioVinicios/pda/internal/observability"
 )
 
-// App is the application under test: the Fx graph of the binary, started in
-// process over the package database and queues, with the real Keycloak (spec
-// decision 21).
+// App is the application under test in process: the Fx graph of the binary,
+// started over the package's database and queues, with the real Keycloak
+// (spec M3, decision 21). Its Harness has the one instance.
 type App struct {
-	BaseURL    string
-	MetricsURL string
-	// Audit reads the audit queue of the app's isolated events topic.
-	Audit *Audit
-	// WagerQueueURL and DLQURL are the app's isolated queues.
-	WagerQueueURL, DLQURL string
-
-	env      *Env
-	sqs      *sqs.Client
-	http     *http.Client
-	contract *Contract
-	logs     *syncBuffer
+	*Harness
+	logs *syncBuffer
 }
 
 // syncBuffer collects the log lines of the application.
@@ -66,64 +49,28 @@ func (b *syncBuffer) String() string {
 // that needs another reference schedule). stop stops it and deletes the queues
 // and the topic.
 func (e *Env) StartApp(ctx context.Context, opts ...func(*config.Config)) (*App, func(), error) {
-	awsCfg, err := rootAWS(ctx)
+	f, err := e.newFixture(ctx)
 	if err != nil {
-		return nil, nil, err
-	}
-	sqsClient, snsClient := sqs.NewFromConfig(awsCfg), sns.NewFromConfig(awsCfg)
-	wager, dlq, removeQueues, err := createQueues(ctx, sqsClient)
-	if err != nil {
-		return nil, nil, err
-	}
-	queues, err := awsclient.ResolveQueues(ctx, sqsClient, wager, dlq)
-	if err != nil {
-		removeQueues()
-		return nil, nil, err
-	}
-	topic, removeTopic, err := CreateEventsTopic(ctx, sqsClient, snsClient)
-	if err != nil {
-		removeQueues()
-		return nil, nil, err
-	}
-	removeAWS := func() {
-		removeTopic()
-		removeQueues()
-	}
-	audit, err := NewAudit(ctx, sqsClient, topic.AuditQueueURL)
-	if err != nil {
-		removeAWS()
 		return nil, nil, err
 	}
 	httpAddr, err := freeAddr(ctx)
 	if err != nil {
-		removeAWS()
+		f.remove()
 		return nil, nil, err
 	}
 	metricsAddr, err := freeAddr(ctx)
 	if err != nil {
-		removeAWS()
+		f.remove()
 		return nil, nil, err
 	}
-	cfg := e.Config()
+	cfg := f.cfg
 	cfg.HTTPAddr, cfg.MetricsAddr = httpAddr, metricsAddr
-	cfg.WagerQueueName, cfg.WagerDLQName = wager, dlq
-	cfg.SNSEventsTopicName = topic.Name
-	cfg.OIDCIssuer, cfg.OIDCJWKSURL = KeycloakIssuer, KeycloakIssuer+"/protocol/openid-connect/certs"
-	cfg.OIDCAudience, cfg.OIDCClockSkew = "pda-api", time.Second
-	cfg.APIDocsEnabled = true
-	cfg.ReferenceRetryBaseDelay, cfg.ReferenceRetryMaxDelay = 100*time.Millisecond, time.Second
-	cfg.ReferenceMaxAttempts, cfg.ReferenceTTL = 3, 3*time.Second
 	for _, opt := range opts {
 		opt(&cfg)
 	}
 	if err := cfg.Validate(); err != nil {
-		removeAWS()
+		f.remove()
 		return nil, nil, fmt.Errorf("testkit: app config: %w", err)
-	}
-	contract, err := LoadContract()
-	if err != nil {
-		removeAWS()
-		return nil, nil, err
 	}
 	logs := &syncBuffer{}
 	app := fx.New(append(bootstrap.Options(),
@@ -131,36 +78,20 @@ func (e *Env) StartApp(ctx context.Context, opts ...func(*config.Config)) (*App,
 		fx.Decorate(func() (*slog.Logger, error) { return observability.NewJSONLogger(logs, "info") }),
 	)...)
 	if err := app.Start(ctx); err != nil {
-		removeAWS()
+		f.remove()
 		return nil, nil, fmt.Errorf("testkit: start the app: %w (logs: %s)", err, logs.String())
 	}
-	a := &App{
-		BaseURL: "http://" + httpAddr, MetricsURL: "http://" + metricsAddr, Audit: audit,
-		WagerQueueURL: queues.WagerURL, DLQURL: queues.DLQURL, sqs: sqsClient,
-		env: e, http: &http.Client{Timeout: requestTimeout}, contract: contract, logs: logs,
-	}
+	h := f.harness
+	h.targets = []*target{newTarget(httpAddr, metricsAddr)}
 	stop := func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		a.http.CloseIdleConnections()
+		h.http.CloseIdleConnections()
 		_ = app.Stop(ctx)
-		removeAWS()
+		f.remove()
 	}
-	return a, stop, nil
+	return &App{Harness: h, logs: logs}, stop, nil
 }
-
-// Client returns a client with a real token of clientID in the realm pda;
-// "" sends no token.
-func (a *App) Client(tb testing.TB, clientID string) *Client {
-	tb.Helper()
-	if clientID == "" {
-		return &Client{app: a}
-	}
-	return &Client{app: a, token: Token(tb, clientID)}
-}
-
-// ClientWithToken returns a client that sends raw as the bearer token.
-func (a *App) ClientWithToken(raw string) *Client { return &Client{app: a, token: raw} }
 
 // Logs returns what the application logged so far.
 func (a *App) Logs() string { return a.logs.String() }
@@ -168,80 +99,13 @@ func (a *App) Logs() string { return a.logs.String() }
 // Metric returns the value of an unlabeled sample of the admin /metrics.
 func (a *App) Metric(tb testing.TB, name string) string {
 	tb.Helper()
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(tb.Context()), requestTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.MetricsURL+"/metrics", nil)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	resp, err := a.http.Do(req)
-	if err != nil {
-		tb.Fatalf("GET /metrics: %v", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	for line := range strings.Lines(string(body)) {
-		if value, ok := strings.CutPrefix(strings.TrimSpace(line), name+" "); ok {
-			return value
-		}
-	}
-	return ""
+	return a.metric(tb, a.targets[0], name)
 }
 
-// MetricValue returns the value of the counter sample named exactly as exposed,
-// labels included (`http_requests_total{method="GET",route="…",status="200"}`),
-// or 0 while the series does not exist yet. Counters are whole numbers, so no
-// floating point is involved.
+// MetricValue returns the value of the counter sample named exactly as
+// exposed, labels included (`http_requests_total{method="GET",route="…",status="200"}`),
+// or 0 while the series does not exist yet.
 func (a *App) MetricValue(tb testing.TB, sample string) int64 {
 	tb.Helper()
-	raw := a.Metric(tb, sample)
-	if raw == "" {
-		return 0
-	}
-	v, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil {
-		tb.Fatalf("metric %s = %q is not a whole number: %v", sample, raw, err)
-	}
-	return v
-}
-
-// OpenWallet opens a wallet of a new player through the API, as the internal
-// service, and checks it against test-plan §6 when the test ends.
-func (a *App) OpenWallet(tb testing.TB, initial Money) Wallet {
-	tb.Helper()
-	resp := a.Client(tb, "wallet-service").Do(tb, Request{Method: http.MethodPost, Path: "/wallets", Body: map[string]any{
-		"playerId": NewID(), "initialBalance": initial,
-	}})
-	if resp.Status != http.StatusCreated {
-		tb.Fatalf("POST /wallets = %d %s", resp.Status, resp.Body)
-	}
-	var w Wallet
-	resp.JSON(tb, &w)
-	tb.Cleanup(func() { a.AssertWalletConsistent(tb, w.ID) })
-	return w
-}
-
-// SendWager sends body to the app's wager queue and returns the SQS message id.
-func (a *App) SendWager(tb testing.TB, body string, o SendOpts) string {
-	tb.Helper()
-	return SendMessage(tb, a.sqs, a.WagerQueueURL, body, o)
-}
-
-// AssertQueueDrained waits until the app's wager queue is empty.
-func (a *App) AssertQueueDrained(tb testing.TB) {
-	tb.Helper()
-	AssertQueueDrained(tb, a.sqs, a.WagerQueueURL)
-}
-
-// DLQDepth is the visible plus in-flight messages of the app's DLQ.
-func (a *App) DLQDepth(tb testing.TB) int {
-	tb.Helper()
-	n, err := QueueDepth(tb.Context(), a.sqs, a.DLQURL)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	return n
+	return a.metricValue(tb, a.targets[0], sample)
 }

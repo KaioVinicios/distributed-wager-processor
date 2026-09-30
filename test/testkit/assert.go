@@ -18,9 +18,9 @@ import (
 // 2–6), the event matrix of the outbox (item 7) and the outbox published and
 // delivered (item 8). It runs in t.Cleanup, so every call detaches from the
 // test's context.
-func (a *App) AssertWalletConsistent(tb testing.TB, walletID string) {
+func (h *Harness) AssertWalletConsistent(tb testing.TB, walletID string) {
 	tb.Helper()
-	resp := a.Client(tb, "wallet-service").Do(tb, Request{Method: http.MethodPost, Path: "/wallets/" + walletID + "/reconciliation"})
+	resp := h.Client(tb, "wallet-service").Do(tb, Request{Method: http.MethodPost, Path: "/wallets/" + walletID + "/reconciliation"})
 	var r Reconciliation
 	resp.JSON(tb, &r)
 	if resp.Status != http.StatusOK || !r.Consistent || r.Difference.Amount != "0.00" {
@@ -29,7 +29,7 @@ func (a *App) AssertWalletConsistent(tb testing.TB, walletID string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(tb.Context()), 30*time.Second)
 	defer cancel()
 	for _, check := range []func(context.Context, *pgxpool.Pool, string) ([]string, error){LedgerProblems, OutboxProblems} {
-		problems, err := check(ctx, a.env.Owner, walletID)
+		problems, err := check(ctx, h.env.Owner, walletID)
 		if err != nil {
 			tb.Fatalf("wallet %s: %v", walletID, err)
 		}
@@ -37,24 +37,24 @@ func (a *App) AssertWalletConsistent(tb testing.TB, walletID string) {
 			tb.Errorf("wallet %s: %s", walletID, p)
 		}
 	}
-	a.assertOutboxDelivered(tb, walletID)
+	h.assertOutboxDelivered(tb, walletID)
 }
 
 // assertOutboxDelivered is item 8 of test-plan §6 (spec M4, decision 18): no
 // event of the wallet stays unpublished, and every one of them reached the
 // audit queue with the content of its payload column, on the contract.
 // Sensitivity: without outbox.Module in the graph, every wallet failed "outbox of wallet … published".
-func (a *App) assertOutboxDelivered(tb testing.TB, walletID string) {
+func (h *Harness) assertOutboxDelivered(tb testing.TB, walletID string) {
 	tb.Helper()
 	Eventually(tb, AuditTimeout, "outbox of wallet "+walletID+" published", func(ctx context.Context) (bool, error) {
 		var pending int
-		err := a.env.Owner.QueryRow(ctx, `SELECT count(*) FROM outbox_events
+		err := h.env.Owner.QueryRow(ctx, `SELECT count(*) FROM outbox_events
 			WHERE message_group_id = $1 AND published_at IS NULL`, walletID).Scan(&pending)
 		return pending == 0, err
 	})
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(tb.Context()), 30*time.Second)
 	defer cancel()
-	stored, err := OutboxPayloads(ctx, a.env.Owner, walletID)
+	stored, err := OutboxPayloads(ctx, h.env.Owner, walletID)
 	if err != nil {
 		tb.Fatalf("wallet %s: %v", walletID, err)
 	}
@@ -62,7 +62,7 @@ func (a *App) assertOutboxDelivered(tb testing.TB, walletID string) {
 	for id := range stored {
 		ids = append(ids, id)
 	}
-	for id, deliveries := range a.Audit.WaitFor(tb, ids...) {
+	for id, deliveries := range h.Audit.WaitFor(tb, ids...) {
 		for _, m := range deliveries {
 			if same, err := sameJSON(m.Body, stored[id]); err != nil || !same {
 				tb.Errorf("wallet %s: event %s delivered %s, stored %s (%v)", walletID, id, m.Body, stored[id], err)
@@ -173,9 +173,6 @@ func SnapshotCounts(tb testing.TB, pool *pgxpool.Pool) map[string]int64 {
 	}
 	return counts
 }
-
-// Owner is the pool of pda_owner, for setups and assertions the app role cannot do.
-func (a *App) Owner() *pgxpool.Pool { return a.env.Owner }
 
 // pollInterval is how often Eventually checks its condition.
 const pollInterval = 50 * time.Millisecond

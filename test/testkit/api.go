@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"testing"
@@ -19,8 +20,9 @@ const requestTimeout = 30 * time.Second
 // Client calls the API under test with one identity. Every exchange goes
 // through the contract (D-20).
 type Client struct {
-	app   *App
-	token string
+	h      *Harness
+	target *target // nil: each request goes to the next live, disarmed instance
+	token  string
 }
 
 // Request is one call. A Body of type string or []byte is sent as is;
@@ -44,6 +46,18 @@ type Response struct {
 // fails the test on a transport error or a violation.
 func (c *Client) Do(tb testing.TB, r Request) *Response {
 	tb.Helper()
+	resp, err := c.Try(tb, r)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return resp
+}
+
+// Try is Do for a test that expects no answer, such as a crash between the
+// commit and the response (C05c): a transport error is returned instead of
+// failing the test. A contract violation still fails it.
+func (c *Client) Try(tb testing.TB, r Request) (*Response, error) {
+	tb.Helper()
 	var body []byte
 	switch b := r.Body.(type) {
 	case nil:
@@ -57,9 +71,16 @@ func (c *Client) Do(tb testing.TB, r Request) *Response {
 			tb.Fatalf("encode body: %v", err)
 		}
 	}
+	tg := c.target
+	if tg == nil {
+		var ok bool
+		if tg, ok = c.h.pick(); !ok {
+			tb.Fatalf("%s %s: no live instance to call", r.Method, r.Path)
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(tb.Context()), requestTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, r.Method, c.app.BaseURL+r.Path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, r.Method, tg.baseURL+r.Path, bytes.NewReader(body))
 	if err != nil {
 		tb.Fatalf("request: %v", err)
 	}
@@ -75,19 +96,19 @@ func (c *Client) Do(tb testing.TB, r Request) *Response {
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
-	resp, err := c.app.http.Do(req)
+	resp, err := c.h.http.Do(req)
 	if err != nil {
-		tb.Fatalf("%s %s: %v", r.Method, r.Path, err)
+		return nil, fmt.Errorf("%s %s: %w", r.Method, r.Path, err)
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		tb.Fatalf("%s %s: read body: %v", r.Method, r.Path, err)
+		return nil, fmt.Errorf("%s %s: read body: %w", r.Method, r.Path, err)
 	}
-	if err := c.app.contract.Check(req, body, resp, respBody, r.Invalid); err != nil {
+	if err := c.h.contract.Check(req, body, resp, respBody, r.Invalid); err != nil {
 		tb.Fatal(err)
 	}
-	return &Response{Status: resp.StatusCode, Header: resp.Header, Body: respBody}
+	return &Response{Status: resp.StatusCode, Header: resp.Header, Body: respBody}, nil
 }
 
 // JSON decodes an application/json body strictly into v.
