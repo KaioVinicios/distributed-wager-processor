@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/KaioVinicios/pda/internal/app"
 	"github.com/KaioVinicios/pda/internal/domain/ident"
 	"github.com/KaioVinicios/pda/internal/domain/wagering"
 )
@@ -133,6 +134,55 @@ func (r transactionRepo) AdvanceDependents(ctx context.Context, providerID, exte
 		return 0, translate(err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+// ClaimDue lists the due PENDING_REFERENCE operations in one statement,
+// skipping the rows another transaction holds (D-11, spec M6 decision 2). The
+// instant is truncated to the microsecond, as AdvanceDependents writes it.
+func (r transactionRepo) ClaimDue(ctx context.Context, now time.Time, limit int) ([]app.PendingReference, error) {
+	rows, err := r.q.Query(ctx, `SELECT id, wallet_id FROM wager_transactions
+		WHERE status = 'PENDING_REFERENCE' AND next_attempt_at <= $1
+		ORDER BY next_attempt_at
+		FOR UPDATE SKIP LOCKED
+		LIMIT $2`, now.UTC().Truncate(time.Microsecond), limit)
+	if err != nil {
+		return nil, translate(err)
+	}
+	defer rows.Close()
+	var out []app.PendingReference
+	for rows.Next() {
+		var ref app.PendingReference
+		if err := rows.Scan(&ref.ID, &ref.WalletID); err != nil {
+			return nil, translate(err)
+		}
+		out = append(out, ref)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, translate(err)
+	}
+	return out, nil
+}
+
+// Lock reads the operation FOR UPDATE, after the caller locked its wallet. OF t
+// keeps the join with the wallet from locking a second row.
+func (r transactionRepo) Lock(ctx context.Context, id string) (*wagering.WagerTransaction, error) {
+	if !ident.Valid(id) {
+		return nil, notFound()
+	}
+	t, err := scanTransaction(r.q.QueryRow(ctx, txSelect+txFrom+` WHERE t.id = $1 FOR UPDATE OF t`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, notFound()
+	}
+	return t, err
+}
+
+// CountPendingReferences feeds the reference_pending_transactions gauge.
+func (r transactionRepo) CountPendingReferences(ctx context.Context) (int, error) {
+	var n int
+	if err := r.q.QueryRow(ctx, `SELECT count(*) FROM wager_transactions WHERE status = 'PENDING_REFERENCE'`).Scan(&n); err != nil {
+		return 0, translate(err)
+	}
+	return n, nil
 }
 
 // scanTransaction reads the txSelect columns of one row, plus extra

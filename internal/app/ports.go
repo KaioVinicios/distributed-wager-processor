@@ -62,6 +62,10 @@ type WalletRepository interface {
 	UpdateBalance(ctx context.Context, w wallet.Wallet) error
 }
 
+// PendingReference is a due PENDING_REFERENCE operation: the wallet to lock
+// first, then the operation (data-model §6).
+type PendingReference struct{ ID, WalletID string }
+
 // TransactionRepository persists wager transactions.
 type TransactionRepository interface {
 	Insert(ctx context.Context, t *wagering.WagerTransaction) error
@@ -81,6 +85,16 @@ type TransactionRepository interface {
 	// AdvanceDependents makes the PENDING_REFERENCE operations waiting for
 	// (providerID, externalID) due at now and returns how many there were.
 	AdvanceDependents(ctx context.Context, providerID, externalID string, now time.Time) (int64, error)
+	// ClaimDue lists up to limit PENDING_REFERENCE operations due at now
+	// (next_attempt_at <= now), oldest first, in one statement: the rows another
+	// transaction holds are skipped (FOR UPDATE SKIP LOCKED). It leases nothing;
+	// the worker rechecks under the locks (D-11, spec M6 decision 2).
+	ClaimDue(ctx context.Context, now time.Time, limit int) ([]PendingReference, error)
+	// Lock reads the operation with SELECT … FOR UPDATE, after the wallet lock
+	// (data-model §6); ErrNotFound when absent.
+	Lock(ctx context.Context, id string) (*wagering.WagerTransaction, error)
+	// CountPendingReferences counts the operations in PENDING_REFERENCE.
+	CountPendingReferences(ctx context.Context) (int, error)
 }
 
 // LedgerRepository appends and reads ledger entries.
