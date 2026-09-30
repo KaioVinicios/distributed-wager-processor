@@ -43,6 +43,8 @@ type Config struct {
 	ReferenceRetryMaxDelay  time.Duration `env:"REFERENCE_RETRY_MAX_DELAY" envDefault:"60s"`
 	ReferenceMaxAttempts    int           `env:"REFERENCE_MAX_ATTEMPTS" envDefault:"8"`
 	ReferenceTTL            time.Duration `env:"REFERENCE_TTL" envDefault:"10m"`
+	ReferencePollInterval   time.Duration `env:"REFERENCE_POLL_INTERVAL" envDefault:"500ms"`
+	ReferenceBatchSize      int           `env:"REFERENCE_BATCH_SIZE" envDefault:"50"`
 
 	// Outbox publisher (D-13, messaging.md §5.1).
 	SNSEventsTopicName   string        `env:"SNS_EVENTS_TOPIC_NAME" envDefault:"wallet-events.fifo"`

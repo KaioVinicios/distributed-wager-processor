@@ -79,6 +79,12 @@ func (c Config) Validate() error {
 	if c.ReferenceTTL <= 0 {
 		fail("REFERENCE_TTL", "must be greater than 0")
 	}
+	if c.ReferencePollInterval <= 0 {
+		fail("REFERENCE_POLL_INTERVAL", "must be greater than 0")
+	}
+	if c.ReferenceBatchSize < 1 {
+		fail("REFERENCE_BATCH_SIZE", "must be at least 1")
+	}
 	c.validateOutbox(fail)
 	c.validateConsumer(fail)
 	return errors.Join(errs...)
