@@ -167,3 +167,99 @@ reference_retries_total 2
 		t.Fatal(err)
 	}
 }
+
+// Covers: OBS-03 (U20; ARCHITECTURE.md §13.2)
+func TestMetrics_Wagers(t *testing.T) {
+	reg := observability.NewRegistry()
+	m := observability.NewMetrics(reg)
+	m.WagerConcluded("http", "BET", "processed", "", 40*time.Millisecond)
+	m.WagerConcluded("http", "BET", "rejected", "INSUFFICIENT_FUNDS", 10*time.Millisecond)
+	m.WagerConcluded("worker", "REFUND", "processed", "", 5*time.Millisecond)
+	m.WagerDuplicate("http", "idempotency")
+	m.WagerDuplicate("http", "idempotency")
+	m.Conflict("lock_timeout")
+	m.Conflict("unique_race")
+	m.Conflict("unique_race")
+
+	want := `
+# HELP concurrency_conflicts_total Concurrency conflicts met while processing an operation, by reason.
+# TYPE concurrency_conflicts_total counter
+concurrency_conflicts_total{reason="lock_timeout"} 1
+concurrency_conflicts_total{reason="unique_race"} 2
+# HELP wager_duplicates_total Repeated deliveries of an operation, by channel and deduplication layer.
+# TYPE wager_duplicates_total counter
+wager_duplicates_total{channel="http",layer="idempotency"} 2
+# HELP wager_transactions_total Newly concluded operations, by channel, kind, outcome and failure code.
+# TYPE wager_transactions_total counter
+wager_transactions_total{channel="http",failure_code="",kind="BET",outcome="processed"} 1
+wager_transactions_total{channel="http",failure_code="INSUFFICIENT_FUNDS",kind="BET",outcome="rejected"} 1
+wager_transactions_total{channel="worker",failure_code="",kind="REFUND",outcome="processed"} 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(want),
+		"concurrency_conflicts_total", "wager_duplicates_total", "wager_transactions_total"); err != nil {
+		t.Fatal(err)
+	}
+	if n := testutil.CollectAndCount(reg, "wager_processing_duration_seconds"); n != 3 {
+		t.Fatalf("wager_processing_duration_seconds series = %d, want 3 (http/processed, http/rejected, worker/processed)", n)
+	}
+}
+
+// Covers: HTTP-07, OBS-03 (U20)
+func TestMetrics_Reconciliation(t *testing.T) {
+	reg := observability.NewRegistry()
+	m := observability.NewMetrics(reg)
+	m.Reconciled(true)
+	m.Reconciled(true)
+	m.Reconciled(false)
+
+	want := `
+# HELP reconciliation_runs_total Reconciliations run, by whether the stored balance matched the ledger.
+# TYPE reconciliation_runs_total counter
+reconciliation_runs_total{consistent="false"} 1
+reconciliation_runs_total{consistent="true"} 2
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), "reconciliation_runs_total"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Covers: AUTH-02, OBS-03 (U20)
+func TestMetrics_Auth(t *testing.T) {
+	reg := observability.NewRegistry()
+	m := observability.NewMetrics(reg)
+	m.AuthFailure("unauthenticated")
+	m.AuthFailure("unauthenticated")
+	m.AuthFailure("provider_mismatch")
+
+	want := `
+# HELP auth_failures_total Refused accesses, by reason.
+# TYPE auth_failures_total counter
+auth_failures_total{reason="provider_mismatch"} 1
+auth_failures_total{reason="unauthenticated"} 2
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), "auth_failures_total"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Covers: OBS-03 (U20)
+func TestMetrics_HTTP(t *testing.T) {
+	reg := observability.NewRegistry()
+	m := observability.NewMetrics(reg)
+	m.HTTPRequest("POST /wallets", "POST", 201, 30*time.Millisecond)
+	m.HTTPRequest("POST /wallets", "POST", 201, 10*time.Millisecond)
+	m.HTTPRequest("unmatched", "GET", 404, time.Millisecond)
+
+	want := `
+# HELP http_requests_total HTTP requests served, by route pattern, method and status.
+# TYPE http_requests_total counter
+http_requests_total{method="GET",route="unmatched",status="404"} 1
+http_requests_total{method="POST",route="POST /wallets",status="201"} 2
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), "http_requests_total"); err != nil {
+		t.Fatal(err)
+	}
+	if n := testutil.CollectAndCount(reg, "http_request_duration_seconds"); n != 2 {
+		t.Fatalf("http_request_duration_seconds series = %d, want 2", n)
+	}
+}

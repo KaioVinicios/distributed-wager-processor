@@ -1,13 +1,14 @@
 package observability
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
-// NewRegistry builds the process registry. The metrics catalog arrives in M7.
+// NewRegistry builds the process registry; NewMetrics registers the catalog on it.
 func NewRegistry() *prometheus.Registry {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
@@ -19,7 +20,7 @@ func NewRegistry() *prometheus.Registry {
 
 // Metrics implements app.Metrics and the ports of the outbox publisher, of
 // the SQS consumer and of the reference worker with
-// Prometheus collectors. M7 adds the rest of the catalog (ARCHITECTURE.md §13.2).
+// Prometheus collectors (ARCHITECTURE.md §13.2).
 type Metrics struct {
 	reconciliationDivergences prometheus.Counter
 
@@ -43,6 +44,14 @@ type Metrics struct {
 	referenceRetries prometheus.Counter
 	referenceExpired prometheus.Counter
 	referencePending prometheus.Gauge
+
+	wagerTransactions  *prometheus.CounterVec
+	wagerDuration      *prometheus.HistogramVec
+	conflicts          *prometheus.CounterVec
+	reconciliationRuns *prometheus.CounterVec
+	authFailures       *prometheus.CounterVec
+	httpRequests       *prometheus.CounterVec
+	httpDuration       *prometheus.HistogramVec
 }
 
 // NewMetrics registers the collectors on reg.
@@ -126,12 +135,44 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 			Name: "reference_pending_transactions",
 			Help: "Operations waiting in PENDING_REFERENCE.",
 		}),
+		wagerTransactions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "wager_transactions_total",
+			Help: "Newly concluded operations, by channel, kind, outcome and failure code.",
+		}, []string{"channel", "kind", "outcome", "failure_code"}),
+		wagerDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "wager_processing_duration_seconds",
+			Help:    "Time to conclude an operation, by channel and outcome.",
+			Buckets: prometheus.ExponentialBucketsRange(0.005, 10, 12),
+		}, []string{"channel", "outcome"}),
+		conflicts: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "concurrency_conflicts_total",
+			Help: "Concurrency conflicts met while processing an operation, by reason.",
+		}, []string{"reason"}),
+		reconciliationRuns: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "reconciliation_runs_total",
+			Help: "Reconciliations run, by whether the stored balance matched the ledger.",
+		}, []string{"consistent"}),
+		authFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "auth_failures_total",
+			Help: "Refused accesses, by reason.",
+		}, []string{"reason"}),
+		httpRequests: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "http_requests_total",
+			Help: "HTTP requests served, by route pattern, method and status.",
+		}, []string{"route", "method", "status"}),
+		httpDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "http_request_duration_seconds",
+			Help:    "HTTP request duration, by route pattern, method and status.",
+			Buckets: prometheus.ExponentialBucketsRange(0.001, 30, 12),
+		}, []string{"route", "method", "status"}),
 	}
 	reg.MustRegister(m.reconciliationDivergences, m.outboxPublished, m.outboxPublishFailed,
 		m.outboxLeaseReclaims, m.outboxPending, m.outboxOldestPending, m.outboxPublishLatency,
 		m.sqsReceived, m.sqsProcessed, m.sqsDuration, m.wagerDuplicates, m.sqsRetries, m.sqsDLQSent,
 		m.sqsDLQDepth, m.sqsReceiveErrors, m.sqsDeleteErrors,
-		m.referenceRetries, m.referenceExpired, m.referencePending)
+		m.referenceRetries, m.referenceExpired, m.referencePending,
+		m.wagerTransactions, m.wagerDuration, m.conflicts, m.reconciliationRuns, m.authFailures,
+		m.httpRequests, m.httpDuration)
 	return m
 }
 
@@ -193,3 +234,32 @@ func (m *Metrics) ReferenceExpired() { m.referenceExpired.Inc() }
 
 // ReferencePending sets the number of operations in PENDING_REFERENCE.
 func (m *Metrics) ReferencePending(n int) { m.referencePending.Set(float64(n)) }
+
+// WagerConcluded counts a newly concluded operation and its processing time.
+func (m *Metrics) WagerConcluded(channel, kind, outcome, failureCode string, d time.Duration) {
+	m.wagerTransactions.WithLabelValues(channel, kind, outcome, failureCode).Inc()
+	m.wagerDuration.WithLabelValues(channel, outcome).Observe(d.Seconds())
+}
+
+// WagerDuplicate counts a repeated delivery caught by layer (inbox or idempotency).
+func (m *Metrics) WagerDuplicate(channel, layer string) {
+	m.wagerDuplicates.WithLabelValues(channel, layer).Inc()
+}
+
+// Conflict counts a concurrency conflict (lock_timeout or unique_race).
+func (m *Metrics) Conflict(reason string) { m.conflicts.WithLabelValues(reason).Inc() }
+
+// Reconciled counts a reconciliation run.
+func (m *Metrics) Reconciled(consistent bool) {
+	m.reconciliationRuns.WithLabelValues(strconv.FormatBool(consistent)).Inc()
+}
+
+// AuthFailure counts a refused access (unauthenticated, forbidden, provider_mismatch).
+func (m *Metrics) AuthFailure(reason string) { m.authFailures.WithLabelValues(reason).Inc() }
+
+// HTTPRequest counts a request and its duration.
+func (m *Metrics) HTTPRequest(route, method string, status int, d time.Duration) {
+	s := strconv.Itoa(status)
+	m.httpRequests.WithLabelValues(route, method, s).Inc()
+	m.httpDuration.WithLabelValues(route, method, s).Observe(d.Seconds())
+}
