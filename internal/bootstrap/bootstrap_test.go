@@ -9,13 +9,15 @@ import (
 
 	"github.com/KaioVinicios/pda/internal/adapters/awsclient"
 	"github.com/KaioVinicios/pda/internal/adapters/outbox"
+	"github.com/KaioVinicios/pda/internal/adapters/sqsconsumer"
 	"github.com/KaioVinicios/pda/internal/app"
 	"github.com/KaioVinicios/pda/internal/auth"
 	"github.com/KaioVinicios/pda/internal/bootstrap"
 	"github.com/KaioVinicios/pda/internal/observability"
 )
 
-// Covers: TST-I07, FX-01 (I07a — M0 modules, M2 persistence, M3 auth, use cases and API, M4 outbox)
+// Covers: TST-I07, FX-01 (I07a — M0 modules, M2 persistence, M3 auth, use cases and API, M4 outbox, M5 consumer)
+// Sensitivity (M5): sqsconsumer.Module out of bootstrap.Options → "missing type: *sqsconsumer.Consumer".
 func TestFxGraph(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/pda")
 	t.Setenv("OIDC_ISSUER", "http://localhost:8080/realms/pda")
@@ -38,9 +40,12 @@ func TestFxGraph(t *testing.T) {
 		store     app.OutboxStore
 		topic     *awsclient.Topic
 		publisher *outbox.Publisher
+		consume   *app.ConsumeWager
+		consumer  *sqsconsumer.Consumer
 	)
 	opts := append(bootstrap.Options(), fx.Populate(&health, &pool, &queues, &handler, &uow, &repos,
-		&verifier, &metrics, &open, &process, &queries, &reconcile, &store, &topic, &publisher))
+		&verifier, &metrics, &open, &process, &queries, &reconcile, &store, &topic, &publisher,
+		&consume, &consumer))
 	if err := fx.ValidateApp(opts...); err != nil {
 		t.Fatalf("fx.ValidateApp() = %v", err)
 	}

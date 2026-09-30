@@ -11,6 +11,7 @@ import (
 	"github.com/KaioVinicios/pda/internal/adapters/httpapi"
 	"github.com/KaioVinicios/pda/internal/adapters/outbox"
 	"github.com/KaioVinicios/pda/internal/adapters/postgres"
+	"github.com/KaioVinicios/pda/internal/adapters/sqsconsumer"
 	"github.com/KaioVinicios/pda/internal/auth"
 	"github.com/KaioVinicios/pda/internal/config"
 	"github.com/KaioVinicios/pda/internal/observability"
@@ -30,6 +31,7 @@ func Options() []fx.Option {
 		auth.Module,
 		appModule,
 		outbox.Module,
+		sqsconsumer.Module,
 		httpapi.Module,
 	}
 }
