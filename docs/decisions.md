@@ -409,7 +409,7 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
   3. o publisher da outbox e o worker de referências são encerrados;
   4. por último, o pool do PostgreSQL e os clientes AWS são fechados.
 - **Workers:** cada um recebe um `context` cancelável e um `sync.WaitGroup`. O `OnStop` cancela e espera até o prazo, registrando em log o início e o fim.
-- **Flags de papel (entregues no M7):** `bootstrap.OptionsFor(config.Roles)` monta o grafo sem os módulos dos papéis desligados; `bootstrap.Options()` lê as quatro variáveis (`config.RolesFromEnv`) antes do Fx, e um valor inválido aborta o start nomeando a variável, sem ecoar o valor. O servidor admin e a `observability` ficam sempre; o `auth` entra junto com o HTTP. Todos os papéis desligados é válido (só o admin sobe, com um `WARN`). Com `HTTP_ENABLED=false` não há rotas de health, porque elas vivem no `httpapi`.
+- **Flags de papel (entregues no M7):** `bootstrap.OptionsFor(config.Roles)` monta o grafo sem os módulos dos papéis desligados; `bootstrap.Options()` lê as quatro variáveis (`config.RolesFromEnv`) antes do Fx, e um valor inválido aborta o start nomeando a variável, sem ecoar o valor. O servidor admin e a `observability` ficam sempre; o `auth` entra junto com o HTTP. Todos os papéis desligados é válido (só o admin sobe, com um `WARN`). Com `HTTP_ENABLED=false` não há rotas de health, porque elas vivem no `httpapi`. Um valor inválido aparece no stderr como `[Fx] ERROR Failed to start: config: HTTP_ENABLED: invalid value` (sem o valor). **Limitação:** o `pda healthcheck` consulta o `/health/ready` da API, então um container com `HTTP_ENABLED=false` ficaria sempre *unhealthy*; nenhum marco separa papéis por container.
 - **Compose:** o serviço `app` roda com 3 réplicas (`app-1`, `app-2`, `app-3`), cada uma com seu pool e sua memória. Portas no host: API em `8081`, `8082` e `8083`, métricas em `9091`, `9092` e `9093`, e Keycloak em `8080`.
 - **Arquitetura verificável:** um teste garante que o pacote `domain` não importa `fx`, `net/http`, `aws` nem `pgx`.
 
@@ -462,6 +462,7 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
   - `wager_transactions_total` e `wager_processing_duration_seconds` ganham `channel` = `http`, `sqs` ou `worker`; as duplicatas do SQS continuam contadas pelo consumidor, e o `app` só conta as do HTTP;
   - `http_requests_total` e `http_request_duration_seconds` usam o **padrão** da rota (`POST /wallets/{walletId}/reconciliation`) e `unmatched` para o que não casa; o log de acesso grava o mesmo `route`;
   - `auth_failures_total{reason}`: `unauthenticated`, `forbidden` e `provider_mismatch`.
+  - os logs de falha do consumidor (retry, DLQ, falha no envio à DLQ, no `DeleteMessage` e no `ChangeMessageVisibility`) carregam `sqsMessageId` e, se o envelope foi lido, `messageId`, `correlationId`, `walletId` e `providerId` (os dois últimos, ainda não validados, cortados em 128 caracteres); os logs do publisher carregam `eventId`, `walletId` (`message_group_id`) e `correlationId` (revisão do M7).
 
 ---
 

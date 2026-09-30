@@ -160,6 +160,7 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
   - o WARN da reconciliação sem saldos, e o `route` do log de acesso com `unmatched`.
 - **Decisão de escopo:** o `/health/ready` continua sempre com PostgreSQL + SQS (HTTP-08). O 503 com o PostgreSQL de fato parado é o R01 (M9).
 - **Ajuste:** a label `version_mismatch` do `concurrency_conflicts_total` saiu, porque a estratégia é pessimista e nenhum caminho a produz.
+- **Revisão pós-marco (Opus, 30/09):** dois achados corrigidos com TDD: (1) uma variável de papel inválida derrubava o processo sem mensagem (o `fx.NopLogger` engolia o erro; U24); (2) os logs de falha do consumidor e do publisher não tinham os IDs do OBS-01 (U25, U26). Também: log e prova do fechamento dos clientes AWS (FX-05) e ajustes de documentação. Spec: [`dev/specs/2026-09-30-m7-review-fixes-design.md`](dev/specs/2026-09-30-m7-review-fixes-design.md) · plano: [`dev/plans/2026-09-30-m7-review-fixes.md`](dev/plans/2026-09-30-m7-review-fixes.md).
 
 **Cobre:** OBS-01..04, FX-01, FX-03, FX-05; FX-04 em processo (R03 e R04 no M9). Spec: [`dev/specs/2026-09-30-m7-observability-design.md`](dev/specs/2026-09-30-m7-observability-design.md) · plano: [`dev/plans/2026-09-30-m7-observability.md`](dev/plans/2026-09-30-m7-observability.md).
 

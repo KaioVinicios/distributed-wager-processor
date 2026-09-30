@@ -146,6 +146,14 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
 - **Ajustes ao plano:** `WagerDuplicate` no lugar de `Duplicate` (a `observability.Metrics` já tinha o método do consumidor); sem helper de chaves de log; `version_mismatch` removida; IDs I25–I27 (o I24 já existia); o 503 real com o PostgreSQL parado ficou com o R01.
 - **Achados da execução:** o primeiro desenho do I14 só olhava linhas com o id da carteira, e um vazamento do header no log de acesso passaria; passou a varrer todo o log com marcadores únicos. `MetricValue` devolve `int64` para não abrir exceção no `forbidigo` do E3.
 
+## 30/09/2026 (qua): revisão do M7
+
+- O M7 foi executado com o Sonnet; o autor pediu uma revisão do marco inteiro com o Opus, contra a spec e o `delivery-requirements.md`.
+- **Achados importantes (corrigidos com TDD):** uma variável de papel inválida derrubava o processo **sem mensagem** (o `fx.NopLogger` do ramo de erro engolia o evento do Fx; o teste lia `app.Err()`, que ninguém vê), e os logs de **falha** do consumidor e do publisher não tinham os IDs do OBS-01 (só `sqsMessageId`/`eventId`).
+- **Correções:** o ramo de erro devolve só `fx.Error` (U24 executa o processo real); loggers por mensagem e por evento (U25, U26); log `aws http client closed` afirmado no I07b (FX-05).
+- **Documentação:** limitação do healthcheck com `HTTP_ENABLED=false`, I25 descrito como teste de ligação, evidência do OBS-02 corrigida, contagem dupla das pendências no §13.2 e o ajuste 6 na spec do M7.
+- [Spec](specs/2026-09-30-m7-review-fixes-design.md) → [plano](plans/2026-09-30-m7-review-fixes.md), aprovados juntos a pedido do autor.
+
 ## Onde paramos
 
 - **M7 concluído (commits aguardando autorização).** Próximo passo: **M8, harness e2e e cenários multi-instância**, começando pela spec.

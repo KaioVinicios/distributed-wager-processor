@@ -10,7 +10,7 @@
 
 Esta spec registra só o **delta** em relação a `docs/`. O servidor admin `:9090`, o logger JSON, o health e 19 métricas já existem desde o M0–M6.
 
-**Ajustes feitos no plano** (valem sobre o texto desta spec): (1) o método das duplicatas do `app.Metrics` é `WagerDuplicate`; (2) sem helper `LogAttrs` (decisão 11): as chaves são literais `camelCase`, conferidas pelo `sloglint` e pelo I14; (3) o log do consumidor mantém `sqsMessageId` (id do broker), e o `messageId` do envelope aparece na linha `wager concluded`; (4) os testes novos são I25 (`TestMetricsEndpoint`), I26 (`TestConcurrencyConflictMetric`) e I27 (`TestFxRoles`); (5) o 503 real com o PostgreSQL parado é do R01 (M9), e o I13 do M7 é o teste unitário mais o `TestFxRoles`.
+**Ajustes feitos no plano** (valem sobre o texto desta spec): (1) o método das duplicatas do `app.Metrics` é `WagerDuplicate`; (2) sem helper `LogAttrs` (decisão 11): as chaves são literais `camelCase`, conferidas pelo `sloglint` e pelo I14; (3) o log do consumidor mantém `sqsMessageId` (id do broker), e o `messageId` do envelope aparece na linha `wager concluded`; (4) os testes novos são I25 (`TestMetricsEndpoint`), I26 (`TestConcurrencyConflictMetric`) e I27 (`TestFxRoles`); (5) o 503 real com o PostgreSQL parado é do R01 (M9), e o I13 do M7 é o teste unitário mais o `TestFxRoles`. (6) os papéis não entram na `Config`: `config.RolesFromEnv` os lê antes do Fx, `fx.Supply(roles)` os entrega ao grafo e o `logRoles` faz o log de início (registrado na [revisão do M7](2026-09-30-m7-review-fixes-design.md)).
 
 ---
 

@@ -362,6 +362,7 @@ JSON estruturado (`log/slog`), com chaves em `camelCase`:
 - **Identificadores**, quando disponíveis: `correlationId`, `messageId`, `transactionId`, `walletId`, `providerId`.
 - **Propagação do `correlationId`:** vem do header `X-Correlation-Id` (ou é gerado), ou do atributo da mensagem SQS. É gravado na transação e segue nos eventos.
 - **Uma linha por conclusão:** `wager concluded`, com os cinco identificadores (o `messageId` só no SQS), `channel`, `kind`, `outcome`, `failureCode` e `replay`. Vale para HTTP, SQS e replays. O log de acesso usa o padrão da rota (`unmatched` quando nenhuma casa).
+- **Falhas também têm os IDs:** os logs de falha do consumidor SQS trazem `sqsMessageId`, `messageId`, `correlationId`, `walletId` e `providerId` (quando o envelope foi lido); os do publisher, `eventId`, `walletId` e `correlationId`. Os erros HTTP registram o `correlationId`, que os liga ao log de acesso (`route`, `providerId`).
 - **Nunca são registrados:** tokens, headers de autorização, a `Idempotency-Key`, segredos, valores (`amount`, saldos) e corpos. O WARN da reconciliação traz só `walletId`, `correlationId` e `entries`; os saldos ficam na resposta ao chamador autorizado. O teste `TestLogsHaveIdsWithoutSecrets` prova isso com marcadores únicos.
 
 ### 13.2 Métricas
@@ -389,7 +390,7 @@ As métricas Prometheus ficam em `/metrics`, em uma porta administrativa separad
 | `auth_failures_total` | counter | `reason` (`unauthenticated`, `forbidden`, `provider_mismatch`) | Diagnóstico de acesso |
 | `http_requests_total` / `http_request_duration_seconds` | counter / histogram | `route` (padrão da rota ou `unmatched`), `method`, `status` | Tráfego HTTP |
 
-O catálogo está completo desde o M7. Os gauges da outbox e o de referências são atualizados pelos próprios workers, no máximo 1×/s. `version_mismatch` não existe: o controle é pessimista (§4) e nenhum caminho produziria a label.
+O catálogo está completo desde o M7. Os gauges da outbox e o de referências são atualizados pelos próprios workers, no máximo 1×/s. `version_mismatch` não existe: o controle é pessimista (§4) e nenhum caminho produziria a label. Uma operação que passa por `PENDING_REFERENCE` aparece duas vezes em `wager_transactions_total`: com `pending_reference` no canal de entrada e com o desfecho no canal `worker`.
 
 Métricas auxiliares do consumidor (`sqs_messages_received_total`, `sqs_receive_errors_total`) estão em [`docs/messaging.md`](docs/messaging.md) §8.
 
@@ -476,7 +477,7 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 9. **Segredos** do `.env.example` e do realm são valores locais de teste. Não há integração com um gerenciador de segredos nem rotação de credenciais.
 10. **Não há rate limiting** nem cotas por provedor.
 11. **Um erro permanente do SNS não descarta o evento.** Um tópico apagado ou uma política revogada fazem a outbox acumular (`outbox_oldest_pending_age_seconds` sobe) até a intervenção; nada confirmado se perde.
-12. **Papéis por env (D-15).** `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED` (todos `true` por padrão) tiram o módulo do grafo; o admin `:9090` sempre sobe. O `/health/ready` continua exigindo PostgreSQL e SQS.
+12. **Papéis por env (D-15).** `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED` (todos `true` por padrão) tiram o módulo do grafo; o admin `:9090` sempre sobe. O `/health/ready` continua exigindo PostgreSQL e SQS. Limitação: o `pda healthcheck` do container consulta a porta da API, então um container com `HTTP_ENABLED=false` ficaria sempre *unhealthy*.
 13. **A espera por referências é finita.** Uma reversão cuja referência fique retida além do limite (por exemplo, numa indisponibilidade prolongada da fila) é rejeitada com `REFERENCE_NOT_FOUND`. O limite é configurável (`REFERENCE_MAX_ATTEMPTS`, `REFERENCE_TTL`).
 
 14. **Ciclo de lock entre carteiras diferentes que se referenciam.** A antecipação de dependentes atualiza linhas de pendências de outra carteira sem travá-la. Duas pendências que se referenciam de carteiras diferentes poderiam, em teoria, formar um ciclo entre o worker e uma requisição HTTP. Isso já vale para o caminho HTTP desde o M3, e o `lock_timeout` o transforma num erro transitório (503 ou nova tentativa do worker); a ordem carteira → transação dentro da mesma carteira é provada por `TestResolveReferencesLockOrder`.
