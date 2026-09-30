@@ -96,7 +96,7 @@ func (p *Publisher) publishBatch(ctx context.Context, batch []app.PendingEvent) 
 	for i := range batch {
 		if batch[i].Reclaimed {
 			p.metrics.LeaseReclaimed()
-			p.log.Info("outbox lease reclaimed", "eventId", batch[i].EventID)
+			p.eventLog(batch[i]).Info("outbox lease reclaimed")
 		}
 	}
 	sem := make(chan struct{}, p.opts.Concurrency)
@@ -124,21 +124,22 @@ func (p *Publisher) publishBatch(ctx context.Context, batch []app.PendingEvent) 
 // publish sends one event and records the outcome. The publication and its
 // record are detached from ctx's cancellation: once begun, they finish.
 func (p *Publisher) publish(ctx context.Context, e app.PendingEvent) {
+	log := p.eventLog(e)
 	pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.opts.Lease/2)
 	err := p.sink.Publish(pubCtx, e)
 	cancel()
 	storeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeTimeout)
 	defer cancel()
 	if err != nil {
-		p.fail(storeCtx, e, err)
+		p.fail(storeCtx, e, err, log)
 		return
 	}
 	at, ok, err := p.store.MarkPublished(storeCtx, e.EventID, p.opts.Owner)
 	switch {
 	case err != nil: // the lease expires and the event is republished with the same eventId (OUT-06b)
-		p.log.Warn("outbox confirmation failed", "eventId", e.EventID, "error", err.Error())
+		log.Warn("outbox confirmation failed", "error", err.Error())
 	case !ok:
-		p.log.Info("outbox event confirmed by another instance", "eventId", e.EventID)
+		log.Info("outbox event confirmed by another instance")
 	default:
 		p.metrics.Published(e.EventType, at.Sub(e.OccurredAt))
 	}
@@ -146,18 +147,24 @@ func (p *Publisher) publish(ctx context.Context, e app.PendingEvent) {
 
 // fail counts the attempt, schedules the next one and releases the lease
 // (D-13). Nothing is discarded, whatever the error (spec M4, decision 7).
-func (p *Publisher) fail(ctx context.Context, e app.PendingEvent, cause error) {
+func (p *Publisher) fail(ctx context.Context, e app.PendingEvent, cause error, log *slog.Logger) {
 	p.metrics.PublishFailed(e.EventType)
 	retryIn := retryDelay(e.Attempts, p.opts.RetryBaseDelay, p.opts.RetryMaxDelay)
-	p.log.Warn("outbox publish failed", "eventId", e.EventID, "eventType", e.EventType,
+	log.Warn("outbox publish failed", "eventType", e.EventType,
 		"attempts", e.Attempts+1, "retryIn", retryIn.String(), "error", cause.Error())
 	ok, err := p.store.MarkFailed(ctx, e.EventID, p.opts.Owner, retryIn, truncateError(cause.Error()))
 	switch {
 	case err != nil: // the lease expires and the event is retried anyway
-		p.log.Warn("outbox failure not recorded", "eventId", e.EventID, "error", err.Error())
+		log.Warn("outbox failure not recorded", "error", err.Error())
 	case !ok:
-		p.log.Info("outbox event reclaimed before its failure was recorded", "eventId", e.EventID)
+		log.Info("outbox event reclaimed before its failure was recorded")
 	}
+}
+
+// eventLog is the logger of one event: its id, the wallet it belongs to
+// (message_group_id, data-model §3.5) and its correlation (OBS-01).
+func (p *Publisher) eventLog(e app.PendingEvent) *slog.Logger {
+	return p.log.With("eventId", e.EventID, "walletId", e.MessageGroupID, "correlationId", e.CorrelationID)
 }
 
 // refreshBacklog updates the lag gauges at most once per backlogEvery (spec
