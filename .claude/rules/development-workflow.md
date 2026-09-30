@@ -16,7 +16,7 @@ O fluxo usa as skills do plugin **superpowers** (`superpowers@claude-plugins-off
    - testes escritos sobre comportamento que já existe passam pela checagem de sensibilidade (sabotar, ver falhar, desfazer) e registram `// Sensitivity: …`.
 4. **Verificação** com `superpowers:verification-before-completion`: nenhuma afirmação de "pronto" sem a saída de `make check` e dos testes com tag (`make test-integration`, `make test-e2e`) na mesma mensagem.
 
-**Proporcionalidade:** uma correção pontual tem spec e plano curtos (poucos parágrafos e poucas tarefas), mas escritos e aprovados. Só *spikes* descartáveis e as exceções de [`docs/development-workflow.md`](../../docs/development-workflow.md) §4.4 (compose, Dockerfile, Makefile, YAML e documentação) dispensam o ciclo.
+**Proporcionalidade:** uma correção pontual tem spec e plano curtos (poucos parágrafos e poucas tarefas), mas escritos e aprovados. Só *spikes* descartáveis e as exceções de [`docs/development-workflow.md`](../../docs/development-workflow.md) §4.4 (compose, Dockerfile, Makefile, YAML, `scripts/*.sh` e documentação) dispensam o ciclo.
 
 ## Convenções
 

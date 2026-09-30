@@ -130,6 +130,7 @@ Estes artefatos não passam por TDD, mas cada um tem uma **validação obrigató
 | `deploy/postgres/01-roles.sh` | Teste I02b (permissões de `pda_app`) |
 | Código de spike | Nunca é mantido. Se a solução for aproveitada, é reescrita com TDD |
 | Documentação | Revisão de links e execução real dos comandos do README no M11 |
+| `scripts/*.sh` (aprovado em 30/09/2026, no M11) | Execução real dos exemplos do README que usam o script (§7 e §8) |
 
 Qualquer outra exceção precisa de aprovação explícita do autor.
 
