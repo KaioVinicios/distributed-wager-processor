@@ -20,7 +20,7 @@ func NewAdminHandler(reg *prometheus.Registry) http.Handler {
 }
 
 // RegisterAdminServer runs the admin server on METRICS_ADDR, separate from the API (D-18).
-func RegisterAdminServer(lc fx.Lifecycle, cfg config.Config, reg *prometheus.Registry, log *slog.Logger) {
+func RegisterAdminServer(lc fx.Lifecycle, sd fx.Shutdowner, cfg config.Config, reg *prometheus.Registry, log *slog.Logger) {
 	srv := &http.Server{Addr: cfg.MetricsAddr, Handler: NewAdminHandler(reg), ReadHeaderTimeout: 5 * time.Second}
-	ServeOnLifecycle(lc, srv, cfg.ShutdownTimeout, log, "admin")
+	ServeOnLifecycle(lc, sd, srv, cfg.ShutdownTimeout, log, "admin")
 }

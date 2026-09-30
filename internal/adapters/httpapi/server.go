@@ -13,8 +13,8 @@ import (
 
 // RegisterServer runs the API server on HTTP_ADDR. It is registered last, so it
 // starts after every dependency and stops first (D-15).
-func RegisterServer(lc fx.Lifecycle, cfg config.Config, handler http.Handler, log *slog.Logger) {
-	observability.ServeOnLifecycle(lc, NewServer(cfg.HTTPAddr, handler), cfg.ShutdownTimeout, log, "api")
+func RegisterServer(lc fx.Lifecycle, sd fx.Shutdowner, cfg config.Config, handler http.Handler, log *slog.Logger) {
+	observability.ServeOnLifecycle(lc, sd, NewServer(cfg.HTTPAddr, handler), cfg.ShutdownTimeout, log, "api")
 }
 
 // NewServer builds the API server. ReadTimeout bounds slow bodies; the

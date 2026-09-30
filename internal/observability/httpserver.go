@@ -13,8 +13,11 @@ import (
 )
 
 // ServeOnLifecycle binds srv to the Fx lifecycle: it listens synchronously on
-// start (a busy port fails Start) and shuts down gracefully on stop.
-func ServeOnLifecycle(lc fx.Lifecycle, srv *http.Server, shutdownTimeout time.Duration, log *slog.Logger, name string) {
+// start (a busy port fails Start) and shuts down gracefully on stop. A server
+// that stops serving on its own shuts the process down with exit code 1, after
+// the ordered stop of the other components, so the replica restarts instead of
+// running without it.
+func ServeOnLifecycle(lc fx.Lifecycle, sd fx.Shutdowner, srv *http.Server, shutdownTimeout time.Duration, log *slog.Logger, name string) {
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", srv.Addr)
@@ -24,6 +27,9 @@ func ServeOnLifecycle(lc fx.Lifecycle, srv *http.Server, shutdownTimeout time.Du
 			go func() {
 				if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					log.Error("http server stopped unexpectedly", "server", name, "error", err.Error())
+					if err := sd.Shutdown(fx.ExitCode(1)); err != nil {
+						log.Error("process shutdown failed", "server", name, "error", err.Error())
+					}
 				}
 			}()
 			log.Info("http server started", "server", name, "addr", ln.Addr().String())
