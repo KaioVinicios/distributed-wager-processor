@@ -3,10 +3,13 @@
 package bootstrap_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +22,7 @@ import (
 
 	"github.com/KaioVinicios/pda/internal/bootstrap"
 	"github.com/KaioVinicios/pda/internal/config"
+	"github.com/KaioVinicios/pda/internal/observability"
 	"github.com/KaioVinicios/pda/test/testkit"
 )
 
@@ -44,6 +48,45 @@ func integrationConfig(t *testing.T) config.Config {
 	}
 	t.Setenv("DATABASE_URL", cfg.DatabaseURL) // config.Load stays valid even if Fx calls it
 	return cfg
+}
+
+// safeBuffer collects log lines written from many goroutines.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// captureLogs replaces the application logger by a JSON logger on buf.
+func captureLogs(buf *safeBuffer) fx.Option {
+	return fx.Decorate(func() (*slog.Logger, error) { return observability.NewJSONLogger(buf, "info") })
+}
+
+// lineIndex is the position of the first log line that contains every part, or -1.
+func lineIndex(logs string, parts ...string) int {
+	i := 0
+	for line := range strings.Lines(logs) {
+		ok := true
+		for _, p := range parts {
+			ok = ok && strings.Contains(line, p)
+		}
+		if ok {
+			return i
+		}
+		i++
+	}
+	return -1
 }
 
 func getJSON(t *testing.T, client *http.Client, url string) (int, map[string]any) {
@@ -74,8 +117,9 @@ func TestFxLifecycle(t *testing.T) {
 	// Snapshot after setup: the testkit's own SQS client connection is not the app's.
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
+	var logs safeBuffer
 	var pool *pgxpool.Pool
-	app := fxtest.New(t, append(bootstrap.Options(), fx.Replace(cfg), fx.Populate(&pool))...)
+	app := fxtest.New(t, append(bootstrap.Options(), fx.Replace(cfg), captureLogs(&logs), fx.Populate(&pool))...)
 	app.RequireStart()
 
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -94,6 +138,21 @@ func TestFxLifecycle(t *testing.T) {
 	defer cancel()
 	if err := pool.Ping(ctx); err == nil {
 		t.Fatal("pool still usable after Stop; want it closed")
+	}
+
+	// FX-04, FX-05: the HTTP server stops first, then the consumer, the
+	// publisher and the worker, and the pool closes last (D-15).
+	order := []int{
+		lineIndex(logs.String(), `"msg":"http server stopped"`, `"server":"api"`),
+		lineIndex(logs.String(), `"msg":"sqs consumer stopped"`),
+		lineIndex(logs.String(), `"msg":"outbox publisher stopped"`),
+		lineIndex(logs.String(), `"msg":"reference worker stopped"`),
+		lineIndex(logs.String(), `"msg":"postgres pool closed"`),
+	}
+	for i, at := range order {
+		if at < 0 || (i > 0 && at <= order[i-1]) {
+			t.Fatalf("stop order = %v (api, consumer, publisher, worker, pool); want every line present and increasing\n%s", order, logs.String())
+		}
 	}
 }
 
@@ -130,11 +189,73 @@ func TestFxFailFast(t *testing.T) {
 		})
 	}
 
+	t.Run("invalid role variable", func(t *testing.T) {
+		t.Setenv("HTTP_ENABLED", "talvez-42")
+		app := fx.New(append(bootstrap.Options(), fx.NopLogger)...)
+		err := app.Err()
+		if err == nil || !strings.Contains(err.Error(), "HTTP_ENABLED") || strings.Contains(err.Error(), "talvez-42") {
+			t.Fatalf("fx.New().Err() = %v, want an error naming HTTP_ENABLED without its value", err)
+		}
+	})
+
 	t.Run("invalid configuration", func(t *testing.T) {
 		t.Setenv("DATABASE_URL", "")
 		app := fx.New(append(bootstrap.Options(), fx.NopLogger)...)
 		if err := app.Err(); err == nil || !strings.Contains(err.Error(), "DATABASE_URL") {
 			t.Fatalf("fx.New().Err() = %v, want an error naming DATABASE_URL", err)
+		}
+	})
+}
+
+// Covers: FX-01, HTTP-08, OBS-04 (I27; I13 with the roles)
+// Sensitivity: making /health/ready check the SQS only when the consumer is on → the "consumer off" case reports no "sqs" check.
+func TestFxRoles(t *testing.T) {
+	cases := []struct {
+		name string
+		off  func(*config.Roles)
+	}{
+		{"consumer off", func(r *config.Roles) { r.Consumer = false }},
+		{"outbox publisher off", func(r *config.Roles) { r.OutboxPublisher = false }},
+		{"reference worker off", func(r *config.Roles) { r.ReferenceWorker = false }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := integrationConfig(t)
+			roles := config.Roles{HTTP: true, Consumer: true, OutboxPublisher: true, ReferenceWorker: true}
+			tc.off(&roles)
+			app := fxtest.New(t, append(bootstrap.OptionsFor(roles), fx.Replace(cfg))...)
+			app.RequireStart()
+			defer app.RequireStop()
+
+			client := &http.Client{Timeout: 5 * time.Second}
+			defer client.CloseIdleConnections()
+			code, body := getJSON(t, client, "http://"+cfg.HTTPAddr+"/health/ready")
+			checks, _ := body["checks"].(map[string]any)
+			if code != http.StatusOK || checks["postgres"] != "UP" || checks["sqs"] != "UP" {
+				t.Fatalf("GET /health/ready = %d %v, want 200 with postgres and sqs UP whatever the roles", code, body)
+			}
+		})
+	}
+
+	t.Run("http off leaves only the admin server", func(t *testing.T) {
+		cfg := integrationConfig(t)
+		roles := config.Roles{Consumer: true, OutboxPublisher: true, ReferenceWorker: true}
+		app := fxtest.New(t, append(bootstrap.OptionsFor(roles), fx.Replace(cfg))...)
+		app.RequireStart()
+		defer app.RequireStop()
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		defer client.CloseIdleConnections()
+		if code, _ := getJSON(t, client, "http://"+cfg.MetricsAddr+"/metrics"); code != http.StatusOK {
+			t.Fatalf("GET /metrics = %d, want 200", code)
+		}
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+cfg.HTTPAddr+"/health/live", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp, err := client.Do(req); err == nil {
+			resp.Body.Close()
+			t.Fatal("the API answered with HTTP_ENABLED off; want the connection refused")
 		}
 	})
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -188,6 +189,23 @@ func (a *App) Metric(tb testing.TB, name string) string {
 		}
 	}
 	return ""
+}
+
+// MetricValue returns the value of the counter sample named exactly as exposed,
+// labels included (`http_requests_total{method="GET",route="…",status="200"}`),
+// or 0 while the series does not exist yet. Counters are whole numbers, so no
+// floating point is involved.
+func (a *App) MetricValue(tb testing.TB, sample string) int64 {
+	tb.Helper()
+	raw := a.Metric(tb, sample)
+	if raw == "" {
+		return 0
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		tb.Fatalf("metric %s = %q is not a whole number: %v", sample, raw, err)
+	}
+	return v
 }
 
 // OpenWallet opens a wallet of a new player through the API, as the internal
