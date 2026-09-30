@@ -4,6 +4,7 @@ Serviço em Go que movimenta carteiras de jogadores a partir de operações de p
 
 - **Stack:** Go 1.27.1, Uber Fx, `net/http`, PostgreSQL 18 (`pgx/v5`, SQL explícito), Keycloak 26 (OIDC, `client_credentials`), SQS e SNS FIFO no MiniStack, `golang-migrate`, `log/slog` e Prometheus.
 - **Execução:** `docker compose up --build` sobe toda a infraestrutura e **3 réplicas** independentes do serviço.
+- **Primeira vez aqui?** O [`docs/getting-started.md`](docs/getting-started.md) explica o projeto em linguagem simples e traz um roteiro de validação com os resultados esperados.
 - **Decisões técnicas:** [`ARCHITECTURE.md`](ARCHITECTURE.md). **Testes:** [`docs/testing.md`](docs/testing.md). **Enunciado:** [`CHALLENGE.md`](CHALLENGE.md).
 
 ---

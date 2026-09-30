@@ -532,6 +532,7 @@ O [`docs/delivery-requirements.md`](docs/delivery-requirements.md) liga cada req
 
 | Documento | Conteúdo |
 | --- | --- |
+| [`docs/getting-started.md`](docs/getting-started.md) | Guia para iniciantes: o projeto em linguagem simples, como subir e um roteiro de validação com payloads e respostas esperadas |
 | [`README.md`](README.md) | Como executar, configurar e testar: pré-requisitos, variáveis, filas, migrations, identidades de teste e exemplos |
 | [`docs/testing.md`](docs/testing.md) | Preparação das dependências dos testes, integração, múltiplas instâncias, simulações de falha e build tags |
 | [`api/openapi.yaml`](api/openapi.yaml) · [`api/events.yaml`](api/events.yaml) | Contratos da API HTTP e dos eventos de saída, validados nos testes |
