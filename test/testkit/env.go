@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,8 +12,9 @@ import (
 	"github.com/KaioVinicios/pda/internal/config"
 )
 
-// Env is the isolated infrastructure of one test package (test-plan §3.2). M2
-// provides the database; M4 and M5 add the queues and the topic.
+// Env is the isolated infrastructure of one test package (test-plan §3.2): the
+// database. The queues and the events topic are created by StartApp, or by
+// the TestMain of a package that needs them without the app.
 type Env struct {
 	DB    *Database
 	App   *pgxpool.Pool // pda_app, the application role
@@ -47,15 +49,36 @@ func NewEnv(ctx context.Context, pkg string) (env *Env, cleanup func(), err erro
 	return &Env{DB: db, App: app, Owner: owner}, cleanup, nil
 }
 
+// NewTestEnv is NewEnv for one test: a database of its own, for tests whose
+// assertions cover a whole table, such as the outbox claim. The database is
+// dropped at cleanup.
+func NewTestEnv(tb testing.TB, name string) *Env {
+	tb.Helper()
+	ctx, cancel := context.WithTimeout(tb.Context(), time.Minute)
+	defer cancel()
+	env, cleanup, err := NewEnv(ctx, name)
+	if err != nil {
+		tb.Fatalf("testkit.NewEnv: %v", err)
+	}
+	tb.Cleanup(cleanup)
+	return env
+}
+
 // Config points at the isolated database with the accelerated times of
-// test-plan §3.3. Only the database part is filled; later milestones add the
-// rest as their components need it.
+// test-plan §3.3. The resources outside the database (queues, topic, IdP) are
+// filled by whoever creates them.
 func (e *Env) Config() config.Config {
 	return config.Config{
-		LogLevel:        "error",
-		ShutdownTimeout: 5 * time.Second,
-		DatabaseURL:     e.DB.AppURL,
-		DBMaxConns:      4,
-		DBLockTimeout:   2 * time.Second,
+		LogLevel:             "error",
+		ShutdownTimeout:      5 * time.Second,
+		DatabaseURL:          e.DB.AppURL,
+		DBMaxConns:           4,
+		DBLockTimeout:        2 * time.Second,
+		OutboxBatchSize:      50,
+		OutboxLease:          2 * time.Second,
+		OutboxPollInterval:   100 * time.Millisecond,
+		OutboxConcurrency:    8,
+		OutboxRetryBaseDelay: 100 * time.Millisecond,
+		OutboxRetryMaxDelay:  time.Second,
 	}
 }

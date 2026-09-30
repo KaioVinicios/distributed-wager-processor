@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/sns"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"go.uber.org/fx"
 
 	"github.com/KaioVinicios/pda/internal/bootstrap"
@@ -24,6 +26,8 @@ import (
 type App struct {
 	BaseURL    string
 	MetricsURL string
+	// Audit reads the audit queue of the app's isolated events topic.
+	Audit *Audit
 
 	env      *Env
 	http     *http.Client
@@ -50,43 +54,59 @@ func (b *syncBuffer) String() string {
 }
 
 // StartApp starts the application once per package, from TestMain: isolated
-// queues, the accelerated times of test-plan §3.3, OIDC against the compose
-// Keycloak with a clock skew of 1 s, and the logs captured for assertions.
-// stop stops it and deletes the queues.
+// queues and events topic, the accelerated times of test-plan §3.3, OIDC
+// against the compose Keycloak with a clock skew of 1 s, and the logs captured
+// for assertions. stop stops it and deletes the queues and the topic.
 func (e *Env) StartApp(ctx context.Context) (*App, func(), error) {
-	client, err := rootAWS(ctx)
+	awsCfg, err := rootAWS(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	wager, dlq, removeQueues, err := createQueues(ctx, client)
+	sqsClient, snsClient := sqs.NewFromConfig(awsCfg), sns.NewFromConfig(awsCfg)
+	wager, dlq, removeQueues, err := createQueues(ctx, sqsClient)
 	if err != nil {
+		return nil, nil, err
+	}
+	topic, removeTopic, err := CreateEventsTopic(ctx, sqsClient, snsClient)
+	if err != nil {
+		removeQueues()
+		return nil, nil, err
+	}
+	removeAWS := func() {
+		removeTopic()
+		removeQueues()
+	}
+	audit, err := NewAudit(ctx, sqsClient, topic.AuditQueueURL)
+	if err != nil {
+		removeAWS()
 		return nil, nil, err
 	}
 	httpAddr, err := freeAddr(ctx)
 	if err != nil {
-		removeQueues()
+		removeAWS()
 		return nil, nil, err
 	}
 	metricsAddr, err := freeAddr(ctx)
 	if err != nil {
-		removeQueues()
+		removeAWS()
 		return nil, nil, err
 	}
 	cfg := e.Config()
 	cfg.HTTPAddr, cfg.MetricsAddr = httpAddr, metricsAddr
 	cfg.WagerQueueName, cfg.WagerDLQName = wager, dlq
+	cfg.SNSEventsTopicName = topic.Name
 	cfg.OIDCIssuer, cfg.OIDCJWKSURL = KeycloakIssuer, KeycloakIssuer+"/protocol/openid-connect/certs"
 	cfg.OIDCAudience, cfg.OIDCClockSkew = "pda-api", time.Second
 	cfg.APIDocsEnabled = true
 	cfg.ReferenceRetryBaseDelay, cfg.ReferenceRetryMaxDelay = 100*time.Millisecond, time.Second
 	cfg.ReferenceMaxAttempts, cfg.ReferenceTTL = 3, 3*time.Second
 	if err := cfg.Validate(); err != nil {
-		removeQueues()
+		removeAWS()
 		return nil, nil, fmt.Errorf("testkit: app config: %w", err)
 	}
 	contract, err := LoadContract()
 	if err != nil {
-		removeQueues()
+		removeAWS()
 		return nil, nil, err
 	}
 	logs := &syncBuffer{}
@@ -95,11 +115,11 @@ func (e *Env) StartApp(ctx context.Context) (*App, func(), error) {
 		fx.Decorate(func() (*slog.Logger, error) { return observability.NewJSONLogger(logs, "info") }),
 	)...)
 	if err := app.Start(ctx); err != nil {
-		removeQueues()
+		removeAWS()
 		return nil, nil, fmt.Errorf("testkit: start the app: %w (logs: %s)", err, logs.String())
 	}
 	a := &App{
-		BaseURL: "http://" + httpAddr, MetricsURL: "http://" + metricsAddr,
+		BaseURL: "http://" + httpAddr, MetricsURL: "http://" + metricsAddr, Audit: audit,
 		env: e, http: &http.Client{Timeout: requestTimeout}, contract: contract, logs: logs,
 	}
 	stop := func() {
@@ -107,7 +127,7 @@ func (e *Env) StartApp(ctx context.Context) (*App, func(), error) {
 		defer cancel()
 		a.http.CloseIdleConnections()
 		_ = app.Stop(ctx)
-		removeQueues()
+		removeAWS()
 	}
 	return a, stop, nil
 }

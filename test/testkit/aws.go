@@ -107,29 +107,29 @@ func createQueues(ctx context.Context, client *sqs.Client) (wager, dlq string, r
 
 // rootAWS points the SDK default chain of this process, used by the
 // application started in process, at MiniStack with the root key, and returns
-// a client with the same key. For TestMain, where t.Setenv is not available.
-func rootAWS(ctx context.Context) (*sqs.Client, error) {
+// a config with the same key. For TestMain, where t.Setenv is not available.
+func rootAWS(ctx context.Context) (aws.Config, error) {
 	vals, err := LoadDotEnv()
 	if err != nil {
-		return nil, err
+		return aws.Config{}, err
 	}
 	for k, v := range map[string]string{
 		"AWS_ENDPOINT_URL": MiniStackURL, "AWS_REGION": vals["AWS_REGION"],
 		"AWS_ACCESS_KEY_ID": rootKey, "AWS_SECRET_ACCESS_KEY": rootKey,
 	} {
 		if err := os.Setenv(k, v); err != nil {
-			return nil, err
+			return aws.Config{}, err
 		}
 	}
 	for _, k := range []string{"AWS_PROFILE", "AWS_SHARED_CREDENTIALS_FILE"} {
 		if err := os.Unsetenv(k); err != nil {
-			return nil, err
+			return aws.Config{}, err
 		}
 	}
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(vals["AWS_REGION"]), awsconfig.WithBaseEndpoint(MiniStackURL),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(rootKey, rootKey, "")))
 	if err != nil {
-		return nil, fmt.Errorf("testkit: aws config: %w", err)
+		return aws.Config{}, fmt.Errorf("testkit: aws config: %w", err)
 	}
-	return sqs.NewFromConfig(cfg), nil
+	return cfg, nil
 }
