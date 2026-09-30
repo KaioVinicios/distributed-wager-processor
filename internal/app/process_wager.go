@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/KaioVinicios/pda/internal/apperrors"
@@ -52,12 +53,20 @@ type ProcessWager struct {
 	ids    IDGenerator
 	policy wagering.ReferenceRetryPolicy
 	log    *slog.Logger
+
+	metrics Metrics
 }
 
 // NewProcessWager builds the use case. reads are the repositories over the
 // pool, used for the idempotency lookup before the transaction.
 func NewProcessWager(uow UnitOfWork, reads Repos, clock Clock, ids IDGenerator, policy wagering.ReferenceRetryPolicy, log *slog.Logger) *ProcessWager {
-	return &ProcessWager{uow: uow, reads: reads, clock: clock, ids: ids, policy: policy, log: log}
+	return &ProcessWager{uow: uow, reads: reads, clock: clock, ids: ids, policy: policy, log: log, metrics: NopMetrics{}}
+}
+
+// WithMetrics reports the outcomes to m; the default discards them.
+func (p *ProcessWager) WithMetrics(m Metrics) *ProcessWager {
+	p.metrics = m
+	return p
 }
 
 // maxAttempts bounds the reruns after a unique-index race (spec decision 4).
@@ -73,14 +82,48 @@ const maxAttempts = 3
 // and reruns from the lookup, which then finds the replay, the conflict or
 // ALREADY_REVERSED; after maxAttempts the race is returned, still transient.
 func (p *ProcessWager) Execute(ctx context.Context, req ProcessRequest) (ProcessResult, error) {
+	start := p.clock.Now()
 	var err error
 	for range maxAttempts {
 		var res ProcessResult
 		if res, err = p.attempt(ctx, req); !isRace(err) {
+			p.observe(ctx, req, res, err, p.clock.Now().Sub(start))
 			return res, err
 		}
+		p.metrics.Conflict(ConflictUniqueRace)
 	}
+	p.observe(ctx, req, ProcessResult{}, err, p.clock.Now().Sub(start))
 	return ProcessResult{}, err
+}
+
+// observe reports one call: a lock conflict, or the conclusion. A replay is a
+// duplicate, not a new conclusion; over SQS the consumer counts its own
+// duplicates (inbox and idempotency), so only HTTP counts here (spec M7, decision 4).
+func (p *ProcessWager) observe(ctx context.Context, req ProcessRequest, res ProcessResult, err error, d time.Duration) {
+	if errors.Is(err, ErrLockTimeout) {
+		p.metrics.Conflict(ConflictLockTimeout)
+	}
+	if err != nil || res.Tx == nil {
+		return
+	}
+	tx, channel := res.Tx, strings.ToLower(string(req.Via))
+	outcome := strings.ToLower(string(tx.Status()))
+	if res.Replay {
+		if req.Via == wagering.ReceivedViaHTTP {
+			p.metrics.WagerDuplicate(channel, "idempotency")
+		}
+	} else {
+		p.metrics.WagerConcluded(channel, string(tx.Kind()), outcome, string(tx.FailureCode()), d)
+	}
+	attrs := []any{
+		"transactionId", tx.ID(), "walletId", tx.WalletID(), "providerId", tx.ProviderID(),
+		"correlationId", req.CorrelationID, "channel", channel,
+		"kind", string(tx.Kind()), "outcome", outcome, "failureCode", string(tx.FailureCode()), "replay", res.Replay,
+	}
+	if req.Inbox != nil {
+		attrs = append(attrs, "messageId", req.Inbox.MessageID)
+	}
+	p.log.InfoContext(ctx, "wager concluded", attrs...)
 }
 
 func isRace(err error) bool {

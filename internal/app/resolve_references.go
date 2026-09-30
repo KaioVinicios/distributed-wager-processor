@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/KaioVinicios/pda/internal/apperrors"
@@ -29,6 +30,7 @@ type ResolveResult struct {
 	Outcome       ResolveOutcome
 	TransactionID string
 	WalletID      string
+	Kind          wagering.Kind
 	FailureCode   wagering.FailureCode // Rejected only
 	Attempts      int
 }
@@ -57,13 +59,34 @@ func (r *ResolveReferences) CountPending(ctx context.Context) (int, error) {
 	return r.p.reads.Transactions().CountPendingReferences(ctx)
 }
 
-// Resolve evaluates one pending operation in its own unit of work: lock the
+// Resolve evaluates one pending operation (see resolve) and reports it: a
+// terminal outcome is a conclusion on the "worker" channel, a rescheduled or
+// skipped attempt is not (spec M7, decision 5).
+func (r *ResolveReferences) Resolve(ctx context.Context, ref PendingReference) (ResolveResult, error) {
+	start := r.p.clock.Now()
+	res, err := r.resolve(ctx, ref)
+	if errors.Is(err, ErrLockTimeout) {
+		r.p.metrics.Conflict(ConflictLockTimeout)
+	}
+	if err != nil {
+		return res, err
+	}
+	switch res.Outcome {
+	case ResolveProcessed, ResolveRejected, ResolveFailed:
+		r.p.metrics.WagerConcluded("worker", string(res.Kind), strings.ToLower(string(res.Outcome)),
+			string(res.FailureCode), r.p.clock.Now().Sub(start))
+	case ResolveSkipped, ResolveRescheduled:
+	}
+	return res, nil
+}
+
+// resolve evaluates one pending operation in its own unit of work: lock the
 // wallet, then the operation (the order of the HTTP path, data-model §6),
 // recheck, and settle it with insert = false. The outcomes are PROCESSED,
 // REJECTED (including the expiration), RESCHEDULED and SKIPPED; an error means
 // nothing was written and the operation stays due (KindTransient), except a
 // permanent failure, which is recorded as FAILED (spec M6, decisions 8 and 9).
-func (r *ResolveReferences) Resolve(ctx context.Context, ref PendingReference) (ResolveResult, error) {
+func (r *ResolveReferences) resolve(ctx context.Context, ref PendingReference) (ResolveResult, error) {
 	tx, err := r.attempt(ctx, ref)
 	if apperrors.Classify(err) == apperrors.KindPermanent {
 		return r.recordFailure(ctx, ref, err)
@@ -132,7 +155,7 @@ func lockPending(ctx context.Context, r Repos, ref PendingReference, now time.Ti
 
 // resultOf reads the outcome from the state settleAndPersist left.
 func resultOf(tx *wagering.WagerTransaction) ResolveResult {
-	res := ResolveResult{TransactionID: tx.ID(), WalletID: tx.WalletID(), Attempts: tx.Attempts()}
+	res := ResolveResult{TransactionID: tx.ID(), WalletID: tx.WalletID(), Kind: tx.Kind(), Attempts: tx.Attempts()}
 	switch tx.Status() {
 	case wagering.StatusProcessed:
 		res.Outcome = ResolveProcessed
@@ -180,5 +203,5 @@ func (r *ResolveReferences) recordFailure(ctx context.Context, ref PendingRefere
 	p.log.ErrorContext(ctx, "permanent failure recorded",
 		"transactionId", failed.ID(), "walletId", failed.WalletID(), "providerId", failed.ProviderID(),
 		"correlationId", failed.CorrelationID(), "error", cause.Error())
-	return ResolveResult{Outcome: ResolveFailed, TransactionID: failed.ID(), WalletID: failed.WalletID(), Attempts: failed.Attempts()}, nil
+	return ResolveResult{Outcome: ResolveFailed, TransactionID: failed.ID(), WalletID: failed.WalletID(), Kind: failed.Kind(), Attempts: failed.Attempts()}, nil
 }

@@ -19,13 +19,34 @@ type Clock interface{ Now() time.Time }
 // lowercase UUIDv7 (D-08).
 type IDGenerator interface{ New() string }
 
-// Metrics is what the use cases report beyond logs. It grows with M7; the
-// observability adapter implements it with Prometheus.
+// Metrics is what the use cases report beyond logs; the observability adapter
+// implements it with Prometheus (D-18). The use cases never import Prometheus.
 type Metrics interface {
 	// ReconciliationDivergence counts a reconciliation whose stored balance
 	// differs from the ledger (reconciliation_divergences_total, HTTP-07).
 	ReconciliationDivergence()
+	// Reconciled counts every reconciliation run (reconciliation_runs_total).
+	Reconciled(consistent bool)
+	// WagerConcluded counts an operation concluded for the first time, by
+	// channel (http, sqs, worker), kind, outcome and failure code, with the
+	// time it took (wager_transactions_total, wager_processing_duration_seconds).
+	WagerConcluded(channel, kind, outcome, failureCode string, d time.Duration)
+	// WagerDuplicate counts a repeated delivery caught by layer
+	// (wager_duplicates_total).
+	WagerDuplicate(channel, layer string)
+	// Conflict counts a concurrency conflict (concurrency_conflicts_total).
+	Conflict(reason string)
 }
+
+// NopMetrics discards every measurement: the default of a use case built
+// without metrics.
+type NopMetrics struct{}
+
+func (NopMetrics) ReconciliationDivergence()                         {}
+func (NopMetrics) Reconciled(bool)                                   {}
+func (NopMetrics) WagerConcluded(_, _, _, _ string, _ time.Duration) {}
+func (NopMetrics) WagerDuplicate(_, _ string)                        {}
+func (NopMetrics) Conflict(string)                                   {}
 
 // UnitOfWork delimits one SQL transaction (D-14). Whoever holds the Repos is
 // inside the transaction; it is never hidden in the context.

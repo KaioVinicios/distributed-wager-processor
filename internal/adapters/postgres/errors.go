@@ -70,6 +70,9 @@ func translate(err error) error {
 	if s, ok := uniqueSentinels[pgErr.ConstraintName]; ok && pgErr.Code == "23505" {
 		return apperrors.New(s.kind, s.code, fmt.Errorf("%w: %w", s.err, cause))
 	}
+	if pgErr.Code == "55P03" || pgErr.Code == "40P01" {
+		return apperrors.New(apperrors.KindTransient, "", fmt.Errorf("%w: %w", app.ErrLockTimeout, cause))
+	}
 	if transientCodes[pgErr.Code] || strings.HasPrefix(pgErr.Code, "08") {
 		return apperrors.New(apperrors.KindTransient, "", cause)
 	}

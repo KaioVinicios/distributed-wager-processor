@@ -14,9 +14,14 @@ import (
 	"github.com/KaioVinicios/pda/internal/apperrors"
 )
 
-type countingMetrics struct{ divergences atomic.Int32 }
+type countingMetrics struct {
+	app.NopMetrics
+	divergences atomic.Int32
+	runs        atomic.Int32
+}
 
 func (m *countingMetrics) ReconciliationDivergence() { m.divergences.Add(1) }
+func (m *countingMetrics) Reconciled(bool)           { m.runs.Add(1) }
 
 // shiftBalance changes the stored balance behind the ledger's back, with the
 // wallet triggers disabled only inside this transaction: ALTER TABLE holds an
@@ -66,6 +71,9 @@ func TestReconcile(t *testing.T) {
 			got.Difference.String() != "0.00" || !got.Consistent || got.CheckedEntries != 2 || metrics.divergences.Load() != 0 {
 			t.Fatalf("reconciliation = %+v, divergences %d", got, metrics.divergences.Load())
 		}
+		if metrics.runs.Load() != 1 {
+			t.Fatalf("runs = %d, want 1", metrics.runs.Load())
+		}
 	})
 
 	t.Run("divergence is reported without changing the balance", func(t *testing.T) {
@@ -88,10 +96,18 @@ func TestReconcile(t *testing.T) {
 			t.Fatalf("divergences = %d, want 1", metrics.divergences.Load())
 		}
 		line := logs.String()
-		for _, want := range []string{`"level":"WARN"`, w.ID(), "corr-reconcile", `"difference":"-5.00"`} {
+		for _, want := range []string{`"level":"WARN"`, w.ID(), "corr-reconcile", `"entries":1`} {
 			if !strings.Contains(line, want) {
 				t.Fatalf("log %s lacks %s", line, want)
 			}
+		}
+		for _, balance := range []string{"95.00", "100.00", "-5.00"} {
+			if strings.Contains(line, balance) {
+				t.Fatalf("log %s leaks the balance %s", line, balance)
+			}
+		}
+		if metrics.runs.Load() != 1 {
+			t.Fatalf("runs = %d, want 1", metrics.runs.Load())
 		}
 		wantWallet(t, w.ID(), "95.00", 1)
 	})

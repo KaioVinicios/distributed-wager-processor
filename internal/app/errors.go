@@ -27,6 +27,15 @@ var (
 	// ErrInboxDuplicate: another consumer recorded the same message first. The
 	// message is a duplicate (messaging.md). KindTransient.
 	ErrInboxDuplicate = errors.New("app: message already recorded in the inbox")
+	// ErrLockTimeout: a row lock was not obtained in time (lock_timeout) or the
+	// database chose this transaction as a deadlock victim. KindTransient.
+	ErrLockTimeout = errors.New("app: lock not obtained")
+)
+
+// Reasons of concurrency_conflicts_total.
+const (
+	ConflictLockTimeout = "lock_timeout"
+	ConflictUniqueRace  = "unique_race"
 )
 
 // Codes of lifecycle §5.3 that the use cases assign; the others come from the

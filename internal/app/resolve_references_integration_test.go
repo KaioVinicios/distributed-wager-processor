@@ -526,3 +526,24 @@ func TestResolveReferencesLockOrder(t *testing.T) {
 		t.Fatalf("operation %s, want PROCESSED", got)
 	}
 }
+
+// Covers: OBS-03 (U23)
+// Sensitivity: not counting the worker's terminal outcomes → "concluded" lacks the worker entry; counting a rescheduled attempt → it gets an extra worker entry.
+func TestResolveReferencesMetrics(t *testing.T) {
+	t.Parallel()
+	m := &recordingMetrics{}
+	f := newFixture()
+	f.pw.WithMetrics(m)
+	w, p := openWallet(t, "100.00"), newProvider()
+
+	pending := process(t, f.pw, w, op{provider: p, kind: "REFUND", amount: "30.00", ext: "refund-1", ref: "bet-1"})
+	f.clock.Advance(time.Minute)
+	wantResolved(t, resolve(t, f, pending), app.ResolveRescheduled, "") // still no BET
+
+	process(t, f.pw, w, op{provider: p, kind: "BET", amount: "30.00", ext: "bet-1"})
+	f.clock.Advance(time.Hour)
+	wantResolved(t, resolve(t, f, pending), app.ResolveProcessed, "")
+
+	concluded, _, _ := m.snapshot()
+	wantList(t, "concluded", concluded, "http/REFUND/pending_reference/", "http/BET/processed/", "worker/REFUND/processed/")
+}

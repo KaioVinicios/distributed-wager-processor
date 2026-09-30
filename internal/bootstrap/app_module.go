@@ -1,6 +1,8 @@
 package bootstrap
 
 import (
+	"log/slog"
+
 	"go.uber.org/fx"
 
 	"github.com/KaioVinicios/pda/internal/app"
@@ -18,7 +20,7 @@ var appModule = fx.Module("app",
 		func(m *observability.Metrics) app.Metrics { return m },
 		newReferencePolicy,
 		app.NewOpenWallet,
-		app.NewProcessWager,
+		newProcessWager,
 		app.NewResolveReferences,
 		app.NewConsumeWager,
 		app.NewQueries,
@@ -31,4 +33,12 @@ var appModule = fx.Module("app",
 func newReferencePolicy(cfg config.Config) (wagering.ReferenceRetryPolicy, error) {
 	return wagering.NewReferenceRetryPolicy(cfg.ReferenceRetryBaseDelay, cfg.ReferenceRetryMaxDelay,
 		cfg.ReferenceMaxAttempts, cfg.ReferenceTTL, nil)
+}
+
+// newProcessWager builds the use case with the process metrics; app.NewProcessWager
+// stays free of them so that its callers in tests need no metrics.
+func newProcessWager(uow app.UnitOfWork, reads app.Repos, clock app.Clock, ids app.IDGenerator,
+	policy wagering.ReferenceRetryPolicy, log *slog.Logger, m app.Metrics,
+) *app.ProcessWager {
+	return app.NewProcessWager(uow, reads, clock, ids, policy, log).WithMetrics(m)
 }

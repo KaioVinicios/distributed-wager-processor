@@ -63,11 +63,10 @@ func (r *Reconcile) Execute(ctx context.Context, walletID, correlationID string)
 	if err != nil {
 		return Reconciliation{}, err
 	}
+	r.metrics.Reconciled(out.Consistent)
 	if !out.Consistent {
 		r.log.WarnContext(ctx, "reconciliation divergence",
-			"walletId", out.WalletID, "correlationId", correlationID,
-			"storedBalance", out.Stored.String(), "calculatedBalance", out.Calculated.String(),
-			"difference", out.Difference.String())
+			"walletId", out.WalletID, "correlationId", correlationID, "entries", out.CheckedEntries)
 		r.metrics.ReconciliationDivergence()
 	}
 	return out, nil
