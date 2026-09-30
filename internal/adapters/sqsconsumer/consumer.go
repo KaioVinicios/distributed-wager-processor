@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -237,15 +238,17 @@ func (c *Consumer) handleGroup(poll, work context.Context, group []types.Message
 // handle concludes one message and applies the action.
 func (c *Consumer) handle(work context.Context, msg types.Message, receivedAt time.Time) action {
 	start := time.Now()
+	log := c.log.With("sqsMessageId", aws.ToString(msg.MessageId))
 	m, err := parseEnvelope(aws.ToString(msg.Body), aws.ToString(msg.MessageAttributes[correlationAttribute].StringValue), receivedAt)
 	var res app.ConsumeResult
 	if err == nil {
+		log = log.With(messageIDs(m)...)
 		ctx, cancel := context.WithTimeout(work, c.opts.ProcessingTimeout)
 		res, err = c.proc.Execute(ctx, m)
 		cancel()
 	}
 	a := decide(conclude(res, err), c.stopping.Load(), receiveCount(msg), c.opts.RetryMaxDelay)
-	c.apply(work, msg, a, err)
+	c.apply(work, msg, a, err, log)
 	if a.outcome != "" {
 		c.metrics.Processed(a.outcome, time.Since(start))
 	}
@@ -255,36 +258,58 @@ func (c *Consumer) handle(work context.Context, msg types.Message, receivedAt ti
 	return a
 }
 
+// messageIDs are the identifiers a parsed message gives to the logs of its
+// handling (OBS-01): the envelope's messageId and correlationId, and the
+// wallet and provider it names. Those two are still unvalidated input, so
+// they are cut to maxMessageIDLen characters; slog's JSON handler escapes them.
+func messageIDs(m app.WagerMessage) []any {
+	ids := []any{"messageId", m.MessageID, "correlationId", m.CorrelationID}
+	if v := m.Input.WalletID; v != nil {
+		ids = append(ids, "walletId", cutRunes(*v, maxMessageIDLen))
+	}
+	if v := m.Input.ProviderID; v != nil {
+		ids = append(ids, "providerId", cutRunes(*v, maxMessageIDLen))
+	}
+	return ids
+}
+
+// cutRunes keeps at most n characters of s.
+func cutRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n])
+}
+
 // apply performs the action on the queue, detached from the cancellation of
 // the work, so a shutdown never leaves a concluded message undeleted.
-func (c *Consumer) apply(work context.Context, msg types.Message, a action, cause error) {
+func (c *Consumer) apply(work context.Context, msg types.Message, a action, cause error, log *slog.Logger) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(work), queueTimeout)
 	defer cancel()
-	id := aws.ToString(msg.MessageId)
 	switch a.kind {
 	case actDelete:
 		// Fault point consumer.after_commit_before_delete (M8).
-		c.delete(ctx, msg)
+		c.delete(ctx, msg, log)
 	case actDLQ:
 		if _, err := c.api.SendMessage(ctx, dlqInput(c.queues.DLQURL, msg, a, time.Now())); err != nil {
 			delay := retryDelay(receiveCount(msg), c.opts.RetryMaxDelay)
-			c.log.Warn("sqs dlq send failed", "sqsMessageId", id, "errorCode", a.code, "error", err.Error())
-			c.changeVisibility(ctx, msg, delay)
+			log.Warn("sqs dlq send failed", "errorCode", a.code, "error", err.Error())
+			c.changeVisibility(ctx, msg, delay, log)
 			c.metrics.Retried("transient")
 			return
 		}
 		c.metrics.SentToDLQ(a.code)
-		c.log.Warn("sqs message sent to the dlq", "sqsMessageId", id, "errorCode", a.code, "errorCategory", a.category)
-		c.delete(ctx, msg)
+		log.Warn("sqs message sent to the dlq", "errorCode", a.code, "errorCategory", a.category)
+		c.delete(ctx, msg, log)
 	case actRetry:
-		c.log.Warn("sqs message failed transiently", "sqsMessageId", id, "retryIn", a.delay.String(), "error", errorText(cause))
-		c.changeVisibility(ctx, msg, a.delay)
+		log.Warn("sqs message failed transiently", "retryIn", a.delay.String(), "error", errorText(cause))
+		c.changeVisibility(ctx, msg, a.delay, log)
 		c.metrics.Retried("transient")
 		if a.transient {
 			c.gate.Report(ctx)
 		}
 	case actRelease:
-		c.changeVisibility(ctx, msg, 0)
+		c.changeVisibility(ctx, msg, 0, log)
 	}
 }
 
@@ -296,28 +321,28 @@ func (c *Consumer) releaseAll(work context.Context, msgs []types.Message, reason
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(work), queueTimeout)
 	defer cancel()
 	for _, msg := range msgs {
-		c.changeVisibility(ctx, msg, 0)
+		c.changeVisibility(ctx, msg, 0, c.log.With("sqsMessageId", aws.ToString(msg.MessageId)))
 		if reason != "" {
 			c.metrics.Retried(reason)
 		}
 	}
 }
 
-func (c *Consumer) delete(ctx context.Context, msg types.Message) {
+func (c *Consumer) delete(ctx context.Context, msg types.Message, log *slog.Logger) {
 	if _, err := c.api.DeleteMessage(ctx, &sqs.DeleteMessageInput{
 		QueueUrl: aws.String(c.queues.WagerURL), ReceiptHandle: msg.ReceiptHandle,
 	}); err != nil {
 		c.metrics.DeleteFailed()
-		c.log.Warn("sqs delete failed", "sqsMessageId", aws.ToString(msg.MessageId), "error", err.Error())
+		log.Warn("sqs delete failed", "error", err.Error())
 	}
 }
 
-func (c *Consumer) changeVisibility(ctx context.Context, msg types.Message, d time.Duration) {
+func (c *Consumer) changeVisibility(ctx context.Context, msg types.Message, d time.Duration, log *slog.Logger) {
 	if _, err := c.api.ChangeMessageVisibility(ctx, &sqs.ChangeMessageVisibilityInput{
 		QueueUrl: aws.String(c.queues.WagerURL), ReceiptHandle: msg.ReceiptHandle,
 		VisibilityTimeout: int32(d / time.Second), //nolint:gosec // ≤ 12 h, validated by config
 	}); err != nil {
-		c.log.Warn("sqs visibility change failed", "sqsMessageId", aws.ToString(msg.MessageId), "error", err.Error())
+		log.Warn("sqs visibility change failed", "error", err.Error())
 	}
 }
 
