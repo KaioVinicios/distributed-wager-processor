@@ -22,7 +22,9 @@ const resolveTimeout = 5 * time.Second
 // SNS stays out of the readiness (spec M4, decision 3).
 var Module = fx.Module("aws",
 	fx.Provide(
-		func(lc fx.Lifecycle) (aws.Config, error) { return NewAWSConfig(newHTTPClient(lc)) },
+		func(lc fx.Lifecycle, log *slog.Logger) (aws.Config, error) {
+			return NewAWSConfig(newHTTPClient(lc, log))
+		},
 		func(c aws.Config) *sqs.Client { return sqs.NewFromConfig(c) },
 		func(c aws.Config) *sns.Client { return sns.NewFromConfig(c) },
 		func(c aws.Config) *sts.Client { return sts.NewFromConfig(c) },

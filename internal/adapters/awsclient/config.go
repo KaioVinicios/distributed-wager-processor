@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -39,10 +40,11 @@ func NewAWSConfig(hc *http.Client) (aws.Config, error) {
 // newHTTPClient builds the SDK HTTP client from the SDK transport defaults and
 // closes its idle keep-alive connections on stop, so the AWS clients shut down
 // after everything that uses them (D-15).
-func newHTTPClient(lc fx.Lifecycle) *http.Client {
+func newHTTPClient(lc fx.Lifecycle, log *slog.Logger) *http.Client {
 	tr := awshttp.NewBuildableClient().GetTransport()
 	lc.Append(fx.Hook{OnStop: func(context.Context) error {
 		tr.CloseIdleConnections()
+		log.Info("aws http client closed")
 		return nil
 	}})
 	return &http.Client{Transport: tr}

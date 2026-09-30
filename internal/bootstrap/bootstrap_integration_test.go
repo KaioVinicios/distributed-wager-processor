@@ -112,6 +112,7 @@ func getJSON(t *testing.T, client *http.Client, url string) (int, map[string]any
 // Covers: TST-I07, FX-03, FX-04, FX-05, HTTP-08 (I07b — M0 modules)
 // Sensitivity: removed pool.Close() from the postgres OnStop → "pool still usable after Stop" + goleak failure.
 // Sensitivity: before awsclient closed idle SDK connections on stop, goleak reported the app's persistConn goroutines.
+// Sensitivity (review of M7): no log in the AWS OnStop → "aws http client closed at -1".
 func TestFxLifecycle(t *testing.T) {
 	cfg := integrationConfig(t)
 	// Snapshot after setup: the testkit's own SQS client connection is not the app's.
@@ -153,6 +154,10 @@ func TestFxLifecycle(t *testing.T) {
 		if at < 0 || (i > 0 && at <= order[i-1]) {
 			t.Fatalf("stop order = %v (api, consumer, publisher, worker, pool); want every line present and increasing\n%s", order, logs.String())
 		}
+	}
+	// FX-05: the AWS clients close after every component that uses them.
+	if aws := lineIndex(logs.String(), `"msg":"aws http client closed"`); aws <= order[3] {
+		t.Fatalf("aws http client closed at %d, want after the reference worker stopped (%d)\n%s", aws, order[3], logs.String())
 	}
 }
 
