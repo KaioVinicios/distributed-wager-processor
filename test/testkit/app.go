@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"go.uber.org/fx"
 
+	"github.com/KaioVinicios/pda/internal/adapters/awsclient"
 	"github.com/KaioVinicios/pda/internal/bootstrap"
 	"github.com/KaioVinicios/pda/internal/observability"
 )
@@ -28,8 +29,11 @@ type App struct {
 	MetricsURL string
 	// Audit reads the audit queue of the app's isolated events topic.
 	Audit *Audit
+	// WagerQueueURL and DLQURL are the app's isolated queues.
+	WagerQueueURL, DLQURL string
 
 	env      *Env
+	sqs      *sqs.Client
 	http     *http.Client
 	contract *Contract
 	logs     *syncBuffer
@@ -65,6 +69,11 @@ func (e *Env) StartApp(ctx context.Context) (*App, func(), error) {
 	sqsClient, snsClient := sqs.NewFromConfig(awsCfg), sns.NewFromConfig(awsCfg)
 	wager, dlq, removeQueues, err := createQueues(ctx, sqsClient)
 	if err != nil {
+		return nil, nil, err
+	}
+	queues, err := awsclient.ResolveQueues(ctx, sqsClient, wager, dlq)
+	if err != nil {
+		removeQueues()
 		return nil, nil, err
 	}
 	topic, removeTopic, err := CreateEventsTopic(ctx, sqsClient, snsClient)
@@ -120,6 +129,7 @@ func (e *Env) StartApp(ctx context.Context) (*App, func(), error) {
 	}
 	a := &App{
 		BaseURL: "http://" + httpAddr, MetricsURL: "http://" + metricsAddr, Audit: audit,
+		WagerQueueURL: queues.WagerURL, DLQURL: queues.DLQURL, sqs: sqsClient,
 		env: e, http: &http.Client{Timeout: requestTimeout}, contract: contract, logs: logs,
 	}
 	stop := func() {
@@ -188,4 +198,26 @@ func (a *App) OpenWallet(tb testing.TB, initial Money) Wallet {
 	resp.JSON(tb, &w)
 	tb.Cleanup(func() { a.AssertWalletConsistent(tb, w.ID) })
 	return w
+}
+
+// SendWager sends body to the app's wager queue and returns the SQS message id.
+func (a *App) SendWager(tb testing.TB, body string, o SendOpts) string {
+	tb.Helper()
+	return SendMessage(tb, a.sqs, a.WagerQueueURL, body, o)
+}
+
+// AssertQueueDrained waits until the app's wager queue is empty.
+func (a *App) AssertQueueDrained(tb testing.TB) {
+	tb.Helper()
+	AssertQueueDrained(tb, a.sqs, a.WagerQueueURL)
+}
+
+// DLQDepth is the visible plus in-flight messages of the app's DLQ.
+func (a *App) DLQDepth(tb testing.TB) int {
+	tb.Helper()
+	n, err := QueueDepth(tb.Context(), a.sqs, a.DLQURL)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return n
 }

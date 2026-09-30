@@ -17,6 +17,9 @@ import (
 // AuditTimeout bounds how long WaitFor waits for the events.
 const AuditTimeout = 10 * time.Second
 
+// receiveTimeout bounds one receive of Absent: well above its 1 s long poll.
+const receiveTimeout = 5 * time.Second
+
 // Attribute is one message attribute of a delivery.
 type Attribute struct {
 	Type  string // String or Number
@@ -90,12 +93,19 @@ func (a *Audit) WaitFor(tb testing.TB, ids ...string) map[string][]AuditMessage 
 	return got
 }
 
-// Absent receives during window and fails tb if any of ids arrives.
+// Absent receives during window and fails tb if any of ids arrives. No
+// receive is canceled halfway: a long poll canceled by the client stays open
+// in the broker and would take, and hide for the visibility timeout, the
+// event delivered right after the window (spec M5 §2.2).
 func (a *Audit) Absent(tb testing.TB, window time.Duration, ids ...string) {
 	tb.Helper()
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(tb.Context()), window)
-	defer cancel()
-	for a.receive(ctx) == nil {
+	for deadline := time.Now().Add(window); time.Now().Before(deadline); {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(tb.Context()), receiveTimeout)
+		err := a.receive(ctx)
+		cancel()
+		if err != nil {
+			tb.Fatalf("audit: %v", err)
+		}
 	}
 	for id, deliveries := range a.lookupAll(ids) {
 		if len(deliveries) > 0 {

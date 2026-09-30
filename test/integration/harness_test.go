@@ -116,3 +116,36 @@ func TestAuditCollector(t *testing.T) {
 	}
 	audit.Absent(t, time.Second, testkit.NewID())
 }
+
+// Covers: OUT-10 (spec M5 §2.2, decision 18)
+// Sensitivity: the Absent of M4, which canceled its last long poll at the end
+// of the window → "event sent after Absent: … not delivered".
+//
+// An event that arrives right after Absent is still collected: Absent leaves
+// no long poll canceled halfway, which the broker keeps open until its wait
+// ends and which takes the next message, hiding it for a visibility timeout
+// (the flake of I05b).
+func TestAuditAbsentLeavesNoPollBehind(t *testing.T) {
+	t.Parallel()
+	root := testkit.RootAWSConfig(t)
+	snsClient, sqsClient := sns.NewFromConfig(root), sqs.NewFromConfig(root)
+	topic := testkit.NewEventsTopic(t, sqsClient, snsClient)
+	audit, err := testkit.NewAudit(t.Context(), sqsClient, topic.AuditQueueURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wallet := testkit.NewID()
+	for range 3 {
+		id := testkit.NewID()
+		audit.Absent(t, 1500*time.Millisecond, id)
+		// Straight into the audit queue: nothing else receives from it meanwhile.
+		testkit.SendMessage(t, sqsClient, topic.AuditQueueURL, auditEnvelope(id, wallet, ""), testkit.SendOpts{GroupID: wallet, DedupID: id})
+		time.Sleep(300 * time.Millisecond)
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+		_, err := audit.Wait(ctx, id)
+		cancel()
+		if err != nil {
+			t.Fatalf("event sent after Absent: %v", err)
+		}
+	}
+}
