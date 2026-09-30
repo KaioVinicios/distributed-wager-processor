@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/fx"
@@ -21,18 +22,27 @@ import (
 	"github.com/KaioVinicios/pda/test/testkit"
 )
 
+// integrationConfig points the whole graph at a database, queues and topic of
+// the test's own: with the outbox publisher in the graph, the shared pda
+// database would have its pending events published to the test's topic.
 func integrationConfig(t *testing.T) config.Config {
 	t.Helper()
+	env := testkit.NewTestEnv(t, "bootstrap")
 	testkit.UseRootAWS(t)
-	wager, dlq := testkit.CreateQueues(t, sqs.NewFromConfig(testkit.RootAWSConfig(t)))
+	root := testkit.RootAWSConfig(t)
+	wager, dlq := testkit.CreateQueues(t, sqs.NewFromConfig(root))
+	topic := testkit.NewEventsTopic(t, sqs.NewFromConfig(root), sns.NewFromConfig(root))
 	cfg := config.Config{
 		LogLevel: "error", HTTPAddr: testkit.FreeAddr(t), MetricsAddr: testkit.FreeAddr(t),
-		ShutdownTimeout: 5 * time.Second, DatabaseURL: testkit.AppDatabaseURL(t), DBMaxConns: 2,
+		ShutdownTimeout: 5 * time.Second, DatabaseURL: env.DB.AppURL, DBMaxConns: 2,
 		DBLockTimeout: 2 * time.Second, WagerQueueName: wager, WagerDLQName: dlq,
 		OIDCIssuer: testkit.KeycloakIssuer, OIDCJWKSURL: testkit.KeycloakIssuer + "/protocol/openid-connect/certs",
 		OIDCAudience: "pda-api", OIDCClockSkew: time.Second, APIDocsEnabled: true,
 		ReferenceRetryBaseDelay: 100 * time.Millisecond, ReferenceRetryMaxDelay: time.Second,
 		ReferenceMaxAttempts: 3, ReferenceTTL: 3 * time.Second,
+		SNSEventsTopicName: topic.Name, OutboxBatchSize: 50, OutboxLease: 2 * time.Second,
+		OutboxPollInterval: 100 * time.Millisecond, OutboxConcurrency: 8,
+		OutboxRetryBaseDelay: 100 * time.Millisecond, OutboxRetryMaxDelay: time.Second,
 	}
 	t.Setenv("DATABASE_URL", cfg.DatabaseURL) // config.Load stays valid even if Fx calls it
 	return cfg
@@ -89,7 +99,7 @@ func TestFxLifecycle(t *testing.T) {
 	}
 }
 
-// Covers: FX-02, AUTH-02 (I07c)
+// Covers: FX-02, AUTH-02, OUT-07 (I07c)
 func TestFxFailFast(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -100,6 +110,7 @@ func TestFxFailFast(t *testing.T) {
 			c.DatabaseURL = "postgres://pda_app:x@127.0.0.1:1/pda?sslmode=disable&connect_timeout=2"
 		}, "postgres"},
 		{"missing queue", func(c *config.Config) { c.WagerQueueName = "missing-" + c.WagerQueueName }, "missing-"},
+		{"missing topic", func(c *config.Config) { c.SNSEventsTopicName = "missing-" + c.SNSEventsTopicName }, "missing-events-"},
 		{"unreachable identity provider", func(c *config.Config) { c.OIDCJWKSURL = "http://127.0.0.1:1/certs" }, "JWKS"},
 	}
 	for _, tc := range cases {

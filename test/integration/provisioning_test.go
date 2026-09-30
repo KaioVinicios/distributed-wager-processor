@@ -40,6 +40,7 @@ func queueAttrs(t *testing.T, c *sqs.Client, name string) (string, map[string]st
 
 // Covers: ART-06, AUTH-09 (validação do deploy/aws/init.sh; prévia do I04f)
 // Sensitivity: dropped sqs:GetQueueAttributes from policies/pda-wallet-service.json → AccessDeniedException (403).
+// Sensitivity (M4): before sns:GetTopicAttributes entered the policy, the service's check failed with AccessDenied.
 // Sensitivity: init.sh with maxReceiveCount 5 → RedrivePolicy assertion fails.
 func TestProvisioning(t *testing.T) {
 	root := testkit.RootAWSConfig(t)
@@ -103,6 +104,10 @@ func TestProvisioning(t *testing.T) {
 	svc := sqs.NewFromConfig(testkit.AWSConfigWithKeys(t, profiles["pda-wallet-service"]))
 	if _, err := svc.GetQueueAttributes(t.Context(), &sqs.GetQueueAttributesInput{QueueUrl: aws.String(wagerURL), AttributeNames: []types.QueueAttributeName{types.QueueAttributeNameQueueArn}}); err != nil {
 		t.Fatalf("pda-wallet-service GetQueueAttributes on %s: %v (want allowed)", wagerQueue, err)
+	}
+	if _, err := sns.NewFromConfig(testkit.AWSConfigWithKeys(t, profiles["pda-wallet-service"])).GetTopicAttributes(t.Context(),
+		&sns.GetTopicAttributesInput{TopicArn: aws.String(topicARN)}); err != nil {
+		t.Fatalf("pda-wallet-service GetTopicAttributes on %s: %v (want allowed: the topic is verified on start)", topicName, err)
 	}
 	provider := sqs.NewFromConfig(testkit.AWSConfigWithKeys(t, profiles["provider-a"]))
 	_, err = provider.ReceiveMessage(t.Context(), &sqs.ReceiveMessageInput{QueueUrl: aws.String(wagerURL), WaitTimeSeconds: 0})

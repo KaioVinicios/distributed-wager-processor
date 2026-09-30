@@ -35,12 +35,6 @@ func databaseURL(user, password, db string) string {
 	return u.String()
 }
 
-// AppDatabaseURL is the shared pda database as pda_app, seen from the host.
-func AppDatabaseURL(tb testing.TB) string {
-	tb.Helper()
-	return databaseURL("pda_app", DotEnv(tb)["PDA_APP_PASSWORD"], "pda")
-}
-
 // Database is an isolated database with the embedded migrations applied
 // (test-plan §3.2).
 type Database struct {
