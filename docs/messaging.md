@@ -139,7 +139,7 @@ A correção **não** depende de o produtor seguir essa convenção. Um `Message
 | Hash | Entrada | Uso |
 | --- | --- | --- |
 | `payload_hash` (negócio) | JSON canônico dos campos de negócio do comando (D-08) | Idempotência entre HTTP e SQS |
-| `message_hash` (inbox) | JSON canônico de `{"type": …, "data": …}` (inclui `idempotencyKey`, exclui `messageId` e `occurredAt`) | Detecta o mesmo `messageId` com conteúdo diferente, o que resulta em DLQ com `MESSAGE_HASH_MISMATCH` |
+| `message_hash` (inbox) | JSON canônico de `{"type": …, "data": …}` (inclui `idempotencyKey`, exclui `messageId` e `occurredAt`), montado a partir do `data` já decodificado, com as chaves em ordem lexicográfica. Um campo ausente e um `null` geram o mesmo hash | Detecta o mesmo `messageId` com conteúdo diferente, o que resulta em DLQ com `MESSAGE_HASH_MISMATCH` |
 
 ---
 
@@ -153,7 +153,7 @@ A correção **não** depende de o produtor seguir essa convenção. Um `Message
 | Mensagens por `ReceiveMessage` | 10 | `SQS_RECEIVE_BATCH` | Máximo do SQS |
 | Long polling | 20 s | `SQS_WAIT_TIME` | Cancelado imediatamente no shutdown |
 | Visibility timeout | 30 s | `SQS_VISIBILITY_TIMEOUT` | Enviado em cada `ReceiveMessage` |
-| Prazo por mensagem | 10 s | `SQS_PROCESSING_TIMEOUT` | `context.WithTimeout`, bem abaixo do visibility timeout |
+| Prazo por mensagem | 10 s | `SQS_PROCESSING_TIMEOUT` | `context.WithTimeout`; o start falha se não for menor que o visibility timeout |
 | Processamento simultâneo | 16 | `SQS_MAX_IN_FLIGHT` | Semáforo por instância |
 | `maxReceiveCount` | 10 | Provisionamento | Tentativas antes da redrive para a DLQ |
 | Backoff transitório | `min(2^receiveCount s, 300 s)` | `SQS_RETRY_MAX_DELAY` | Aplicado com `ChangeMessageVisibility` |
@@ -167,7 +167,9 @@ A correção **não** depende de o produtor seguir essa convenção. Um `Message
 
 1. Agrupa as mensagens por `MessageGroupId` (atributo de sistema pedido no `ReceiveMessage`).
 2. Grupos diferentes são processados **em paralelo**, e mensagens do mesmo grupo **em sequência**, na ordem recebida.
-3. Se uma mensagem do grupo falhar de forma transitória, as seguintes do mesmo grupo **não** são processadas e voltam com `ChangeMessageVisibility(0)`. O FIFO não entrega as mensagens seguintes de um grupo enquanto houver uma em andamento, então a ordem é preservada.
+3. Se uma mensagem do grupo falhar de forma transitória, as seguintes do mesmo grupo **não** são processadas e voltam com `ChangeMessageVisibility(0)`. O FIFO não entrega as mensagens seguintes de um grupo enquanto houver uma em andamento, então a ordem é preservada. Cada liberação conta um recebimento das seguintes: com uma falha transitória persistente na primeira, as seguintes do grupo também chegam à DLQ pela redrive, junto com ela (comportamento do FIFO).
+   - **Liberação por prazo:** antes de começar cada mensagem, se o visibility restante (contado desde o recebimento) é menor que o `SQS_PROCESSING_TIMEOUT`, ela e as seguintes do grupo são liberadas sem processar (`sqs_retries_total{reason="deadline_release"}`). Nenhuma mensagem é processada depois de poder ter sido reentregue.
+   - **Orquestração:** o caso de uso `app.ConsumeWager` consulta a inbox, valida e chama o `ProcessWager`, que grava a inbox em todo caminho de conclusão. Uma violação da PK da inbox no commit recomeça pela consulta à inbox.
 4. As ações por resultado seguem [`transaction-lifecycle.md`](transaction-lifecycle.md) §6.2. O resumo:
 
 | Resultado | Ação |
@@ -181,7 +183,7 @@ A correção **não** depende de o produtor seguir essa convenção. Um `Message
 
 ### 4.3 Pausa por saúde
 
-Quando um erro transitório de **infraestrutura** acontece (conexão com o PostgreSQL, timeout, `57P01`), o consumidor marca a dependência como indisponível:
+Quando uma mensagem termina em erro transitório, o consumidor faz um `Ping` no pool (timeout de 1 s). Se o ping falha, a indisponibilidade é de **infraestrutura** e o consumidor marca a dependência como indisponível; se passa, o erro era da mensagem (lock timeout, corrida) e segue o backoff normal:
 - Os pollers **param de chamar `ReceiveMessage`** e verificam o PostgreSQL com ping a cada 2 s, voltando a receber quando o ping responde.
 - As mensagens já recebidas seguem o backoff normal. As que ainda estão na fila não são recebidas, então não incrementam o `receiveCount`.
 
@@ -194,7 +196,7 @@ Uma falha do SQS (`ReceiveMessage` com erro) faz o poller tentar de novo com bac
 | Origem | Como chega | Atributos |
 | --- | --- | --- |
 | Tentativas esgotadas (transitória persistente) | Redrive automática do SQS após `maxReceiveCount` | Os originais |
-| Erro permanente: entrada inválida ([`transaction-lifecycle.md`](transaction-lifecycle.md) §5.3–§5.4), conflito de idempotência, `UNKNOWN_WALLET` ou falha permanente de infraestrutura (`INTERNAL_PERMANENT_FAILURE`, com `FAILED` gravado no banco) | `SendMessage` explícito para a DLQ, depois `DeleteMessage` | `errorCode`, `errorCategory`, `originalMessageId` (id SQS), `consumerName`, `failedAt` |
+| Erro permanente: entrada inválida ([`transaction-lifecycle.md`](transaction-lifecycle.md) §5.3–§5.4), conflito de idempotência, `UNKNOWN_WALLET`, falha permanente de infraestrutura (`INTERNAL_PERMANENT_FAILURE`, com `FAILED` gravado no banco) ou falha permanente sem registro possível (`INTERNAL_ERROR`: a operação já gravada com a mesma chave não pode ser lida) | `SendMessage` explícito para a DLQ, depois `DeleteMessage` | `errorCode`, `errorCategory`, `originalMessageId` (id SQS), `consumerName`, `failedAt` |
 
 - **Envio explícito:** usa o `MessageGroupId` original (ou `invalid-messages` se não houver) e `MessageDeduplicationId = <id SQS original>`. Um crash entre o envio e o `DeleteMessage` produz no máximo uma cópia a mais na DLQ, e o FIFO deduplica dentro de 5 min.
 - **Se o envio para a DLQ falhar:** a mensagem **não** é removida e o caso é tratado como transitório.
@@ -213,6 +215,8 @@ No `OnStop`, com prazo de `SHUTDOWN_TIMEOUT` (20 s, e `fx.StopTimeout` de 30 s):
 5. O `OnStop` do consumidor só retorna depois disso. Só então o pool do PostgreSQL é fechado (D-15).
 
 Em nenhum desses caminhos uma mensagem é removida sem commit. Um `SIGKILL` no meio do processamento equivale ao passo 4 sem a liberação: a mensagem reaparece quando o visibility timeout vence.
+
+> **Limitação (achado da validação do M5):** um long polling cancelado pelo cliente no passo 1 continua aberto no broker até o fim do seu `WaitTimeSeconds`. Uma mensagem liberada nesse intervalo pode ser entregue a esse poll órfão e ficar invisível por um visibility timeout antes de voltar à fila. Não há perda nem duplicidade, só um atraso de até um visibility timeout para essa mensagem. Os testes de shutdown usam short polling para observar a liberação em si.
 
 ---
 
@@ -363,10 +367,11 @@ Emitido **uma vez**, quando a operação entra em `PENDING_REFERENCE`. As novas 
 | `sqs_messages_received_total` | counter | — |
 | `sqs_messages_processed_total` | counter | `outcome` (`processed`, `rejected`, `pending_reference`, `replay`, `failed`) |
 | `wager_duplicates_total` | counter | `channel` (`http`, `sqs`), `layer` (`inbox`, `idempotency`) |
-| `sqs_retries_total` | counter | `reason` |
+| `sqs_retries_total` | counter | `reason` (`transient`, `deadline_release`) |
 | `sqs_dlq_sent_total` | counter | `reason` (código de erro) |
 | `sqs_dlq_depth` | gauge | `queue` |
 | `sqs_receive_errors_total` | counter | — |
+| `sqs_delete_errors_total` | counter | — (`DeleteMessage` falhou depois do commit) |
 | `sqs_processing_duration_seconds` | histogram | `outcome` |
 | `outbox_published_total` | counter | `event_type` |
 | `outbox_publish_failures_total` | counter | `event_type` |

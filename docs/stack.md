@@ -63,6 +63,7 @@ Versões verificadas no proxy do Go e nos registros de imagens em **28/09/2026**
 | `github.com/google/uuid` | v1.6.0 | UUIDv7 |
 | `github.com/caarlos0/env/v11` | v11.4.1 | Leitura da configuração a partir do ambiente |
 | `go.uber.org/goleak` | v1.3.0 | Detecção de goroutines vazadas (apenas testes) |
+| `github.com/aws/aws-sdk-go-v2/service/iam` | v1.64.1 | Usuários IAM de teste do I04f (apenas testes, M5) |
 | `github.com/getkin/kin-openapi` | v0.149.0 | Validação de requisição e resposta contra `api/openapi.yaml` (apenas testes, D-20) |
 
 **Frontend de documentação** (sem dependência Go): `swagger-ui-dist` **5.33.0**, carregado por CDN (jsDelivr) na página `/docs`, com versão fixada na URL.
@@ -317,7 +318,7 @@ fmt-check:
 
 1. **Biblioteca padrão primeiro.** Uma dependência nova só entra se resolver algo que a stdlib não resolve razoavelmente, e ela precisa ser registrada na tabela §2.1 com o motivo.
 2. **Versões fixadas e `go.sum` versionado.** Atualizações são deliberadas e passam por `make check`.
-3. **Dependências de teste** (`goleak`, `kin-openapi`) só são importadas em arquivos `_test.go` ou em `test/`.
+3. **Dependências de teste** (`goleak`, `kin-openapi`, `service/iam`) só são importadas em arquivos `_test.go` ou em `test/`.
 4. **Ferramentas** (golangci-lint, govulncheck, migrate) ficam fora do `go.mod`: rodam por imagem Docker ou por `go run` com versão fixa.
 
 ---

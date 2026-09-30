@@ -215,7 +215,7 @@ A transação é gravada como `FAILED` em uma transação SQL **separada**, sem 
 | `UNSUPPORTED_MESSAGE_TYPE` | CORRECTABLE | `type` diferente de `WagerTransactionRequested` |
 | `MESSAGE_HASH_MISMATCH` | CORRECTABLE | O mesmo `messageId` já foi tratado com conteúdo diferente |
 
-Os demais motivos de DLQ reutilizam os códigos de §5.2 e §5.3, por exemplo `INVALID_AMOUNT`, `OPENING_NOT_ALLOWED`, `UNKNOWN_WALLET`, `IDEMPOTENCY_KEY_REUSED` e `INTERNAL_PERMANENT_FAILURE`.
+Os demais motivos de DLQ reutilizam os códigos de §5.2 e §5.3, por exemplo `INVALID_AMOUNT`, `OPENING_NOT_ALLOWED`, `UNKNOWN_WALLET`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL_PERMANENT_FAILURE` e `INTERNAL_ERROR` (falha permanente sem registro possível, o equivalente ao 500 `INTERNAL_ERROR` do HTTP).
 
 Os códigos são **estáveis**: fazem parte do contrato, e renomear um código conta como quebra de contrato.
 
@@ -273,7 +273,8 @@ receber → parsear o envelope (inválido → DLQ)
 | Inválida, hash divergente, conflito de idempotência, `UNKNOWN_WALLET` | `SendMessage` para a DLQ com o atributo `errorCode`, seguido de `DeleteMessage` |
 | `FAILED` persistido (com a inbox, em transação separada) | Envio explícito para a DLQ (`INTERNAL_PERMANENT_FAILURE`), seguido de `DeleteMessage` |
 | Transitória | Nada é removido. `ChangeMessageVisibility` com backoff; após `maxReceiveCount = 10`, a redrive leva à DLQ. Numa queda geral do banco, os pollers pausam (`messaging.md` §4.3) |
-| Violação da PK da inbox no commit (dois consumidores, mesma mensagem) | Rollback e tratamento como duplicata: `DeleteMessage` |
+| Violação da PK da inbox no commit (dois consumidores, mesma mensagem) | Rollback e nova consulta à inbox (até 3 rodadas): mesmo hash → duplicata e `DeleteMessage`; hash diferente → DLQ com `MESSAGE_HASH_MISMATCH` |
+| Falha permanente sem `FAILED` possível (a operação já gravada com a mesma chave não pode ser lida) | DLQ com `INTERNAL_ERROR`, sem inbox |
 
 ### 6.3 Worker de referências
 

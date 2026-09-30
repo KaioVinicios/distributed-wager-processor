@@ -344,6 +344,12 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
 | `FAILED` (falha permanente de infraestrutura) | `FAILED` e inbox gravados em transação separada; depois, envio explícito para a DLQ com `errorCode = INTERNAL_PERMANENT_FAILURE` e `DeleteMessage` |
 | `SIGTERM` | Cancela o long polling, espera o trabalho em andamento até o prazo de shutdown (20 s) e libera o que sobrar com `ChangeMessageVisibility(0)` |
 | Nome do consumidor (inbox) | `wager-transactions-consumer` |
+| Orquestração (M5) | Caso de uso `app.ConsumeWager`: inbox (`Find`, comparação do hash) → `NewCommand` → `ProcessWager` com o `ProcessRequest.Inbox` preenchido, que grava a inbox em todo caminho de conclusão (resultado novo, replay e `FAILED`). `ErrInboxDuplicate` no commit recomeça pelo `Find` (até 3 rodadas), então uma corrida entre conteúdos diferentes também vira `MESSAGE_HASH_MISMATCH`. O `sqsconsumer` só cuida do transporte |
+| Gatilho da pausa por saúde (M5) | Depois de qualquer erro transitório, um `Ping` no pool (1 s). Se falha, os pollers pausam; se passa, o erro era da mensagem e segue o backoff. Não exige classificação nova no `apperrors` |
+| Prazo × visibility (M5) | `SQS_PROCESSING_TIMEOUT < SQS_VISIBILITY_TIMEOUT`, validado no start. Antes de cada mensagem, se o visibility restante é menor que o prazo, ela e as seguintes do grupo são liberadas sem processar (`ChangeMessageVisibility(0)`) |
+| Erro permanente sem `FAILED` (M5) | A linha já gravada com a mesma chave não pode ser lida: DLQ com `errorCode = INTERNAL_ERROR`, sem inbox (o 500 `INTERNAL_ERROR` do HTTP) |
+| Falha do `DeleteMessage` após o commit (M5) | Log e `sqs_delete_errors_total`; a reentrega cai na inbox como duplicata |
+| Long polling no shutdown (M5, achado da validação) | O poll cancelado pelo cliente continua aberto no broker até o fim do seu wait e pode esconder, por um visibility timeout, uma mensagem liberada nesse intervalo. Sem perda nem duplicidade (messaging §4.5). O `testkit.Audit.Absent` deixou de cancelar receives no meio pelo mesmo motivo |
 
 ---
 

@@ -74,7 +74,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [x] **AUTH-06** ⛔ Operações de carteira (abertura, leitura, ledger, reconciliação) ficam restritas ao serviço interno. *(M3, 29/09: A02c `TestInternalOperationsRestricted`; `TestEdgeAuthentication`.)*
 - [x] **AUTH-07** ⛔ Um acesso não autorizado não produz efeito financeiro nem expõe dados. A autorização acontece antes de qualquer escrita ou consulta de idempotência. *(M3, 29/09: A03 `TestUnauthorizedHasNoEffects` (contagem de todas as tabelas antes e depois); a autorização roda antes do caso de uso.)*
 - [x] **AUTH-08** `GET /health/live` e `GET /health/ready` são públicos. *(M3, 29/09: A04 `TestPublicEndpoints` (só health e docs sem token); `TestEdgeAuthentication`.)*
-- [~] **AUTH-09** O acesso à mensageria é controlado por credenciais e políticas do broker, e o consumidor continua aplicando as validações de domínio. *(M0, 29/09: M0: MiniStack `AUTH=true`, usuários IAM com políticas de identidade; `TestProvisioning` prova uma permissão e uma negação. Matriz completa no I04f (M5).)*
+- [x] **AUTH-09** O acesso à mensageria é controlado por credenciais e políticas do broker, e o consumidor continua aplicando as validações de domínio. *(M0, 29/09: M0: MiniStack `AUTH=true`, usuários IAM com políticas de identidade; `TestProvisioning` prova uma permissão e uma negação. Matriz completa no I04f (M5).)* *(M5, 29/09: I04f `TestBrokerPoliciesEnforced` aplica os documentos de `deploy/aws/policies/` a usuários IAM do teste e prova permissões e negações; o consumidor valida tudo pelo domínio (I04c).)*
 - [x] **AUTH-10** A escolha do IdP, a validação de credenciais e o modelo de permissões estão justificados no `ARCHITECTURE.md`. *(M3, 29/09: `ARCHITECTURE.md` §10.)*
 
 ---
@@ -211,24 +211,24 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 12. Consumidor SQS (§10)
 
-- [ ] **SQS-01** Filas `wager-transactions.fifo` e `wager-transactions-dlq.fifo` provisionadas, com redrive configurado.
-- [ ] **SQS-02** HTTP e SQS compartilham o mesmo caso de uso e as mesmas garantias. A chave de idempotência vem de `data.idempotencyKey`.
-- [~] **SQS-03** Inbox com `UNIQUE (consumerName, messageId)`, usando o `messageId` do envelope como identidade durável. O hash é verificado em reentregas. *(M2, 29/09: `inbox_pk`: `TestConstraints`, `TestInboxRepository` (`ErrInboxDuplicate`). O consumidor e o hash são do M5.)*
-- [ ] **SQS-04** Inbox, conclusão do tratamento, domínio, ledger e outbox compartilham a mesma transação SQL.
-- [ ] **SQS-05** A mensagem só é removida da fila após o commit do tratamento durável.
-- [ ] **SQS-06** Uma rejeição de negócio confirmada é terminal e permite remover a mensagem.
-- [ ] **SQS-07** Falha transitória leva a retry com backoff. Erro permanente ou tentativas esgotadas levam à DLQ.
-- [ ] **SQS-08** Com uma `PENDING_REFERENCE` já persistida, a mensagem pode ser concluída e o worker de referências assume a continuidade.
-- [ ] **SQS-09** Em `SIGTERM`, o consumidor para de buscar mensagens e conclui o trabalho em andamento dentro do prazo, ou libera a visibilidade para reentrega segura.
-- [ ] **SQS-10** Documentados: limites de tentativas, visibility timeout, tratamento de mensagens inválidas, `MessageGroupId` e `MessageDeduplicationId`.
-- [ ] **SQS-11** A concorrência entre as entradas HTTP e SQS foi validada.
+- [x] **SQS-01** Filas `wager-transactions.fifo` e `wager-transactions-dlq.fifo` provisionadas, com redrive configurado. *(M5, 29/09: `TestProvisioning` (FIFO, redrive com `maxReceiveCount = 10`); filas isoladas com redrive após 3 recebimentos nos testes, provadas pelo I04d `TestTransientFailureRedrive`.)*
+- [x] **SQS-02** HTTP e SQS compartilham o mesmo caso de uso e as mesmas garantias. A chave de idempotência vem de `data.idempotencyKey`. *(M5, 29/09: `app.ConsumeWager` chama o mesmo `ProcessWager`; `TestSQSEndToEnd` (SQS e depois HTTP = replay), `TestConsumeWagerReplayAcrossChannels` (HTTP e depois SQS), U05b `TestPayloadHashHTTPEqualsSQS` com o envelope real.)*
+- [x] **SQS-03** Inbox com `UNIQUE (consumerName, messageId)`, usando o `messageId` do envelope como identidade durável. O hash é verificado em reentregas. *(M2, 29/09: `inbox_pk`: `TestConstraints`, `TestInboxRepository` (`ErrInboxDuplicate`). O consumidor e o hash são do M5.)* *(M5, 29/09: I04a `TestInboxDeduplication`, I04b `TestInboxHashMismatch`, `TestConsumeWagerInboxRace` (corrida na PK recomeça pelo `Find`), `TestMessageHash`.)*
+- [x] **SQS-04** Inbox, conclusão do tratamento, domínio, ledger e outbox compartilham a mesma transação SQL. *(M5, 29/09: `TestConsumeWager` (inbox com o `transaction_id` do resultado), `TestConsumeWagerAtomicInbox` (inbox que falha desfaz tudo; com sensibilidade), `TestConsumeWagerPermanentFailure` (`FAILED` e inbox na mesma UoW separada).)*
+- [x] **SQS-05** A mensagem só é removida da fila após o commit do tratamento durável. *(M5, 29/09: `TestDecide` (tabela de ações), I04a (DLQ vazia: sem `DeleteMessage`, a sabotagem é detectada), `TestDLQSendFailure` (envio à DLQ que falha não remove), `TestDeleteFailureIsCounted`. O crash entre commit e delete é o C05a do M8.)*
+- [x] **SQS-06** Uma rejeição de negócio confirmada é terminal e permite remover a mensagem. *(M5, 29/09: I04e `TestBusinessRejectionDeletesMessage` (BET sem saldo: `REJECTED`, fila e DLQ vazias, `WagerTransactionRejected` na auditoria).)*
+- [x] **SQS-07** Falha transitória leva a retry com backoff. Erro permanente ou tentativas esgotadas levam à DLQ. *(M5, 29/09: I04c `TestInvalidMessagesGoToDLQ`, I04d `TestTransientFailureRedrive`, `TestPermanentFailureToDLQ` (I03b pelo SQS), `TestRetryDelay`, `TestGroupOrder`, `TestDeadlineRelease`, `TestHealthGatePauses` (queda do banco não consome tentativas). A queda real do PostgreSQL com 3 processos é o R01 (M9).)*
+- [~] **SQS-08** Com uma `PENDING_REFERENCE` já persistida, a mensagem pode ser concluída e o worker de referências assume a continuidade. *(M5, 29/09: `TestConsumeWager` grava a inbox `PENDING_REFERENCE` e `TestDecide` remove a mensagem. A continuidade é do worker (M6).)*
+- [x] **SQS-09** Em `SIGTERM`, o consumidor para de buscar mensagens e conclui o trabalho em andamento dentro do prazo, ou libera a visibilidade para reentrega segura. *(M5, 29/09: `TestConsumerShutdown` (espera o que está em andamento, libera o que não começou, cancela e libera no prazo; goleak), I07b `TestFxLifecycle`; stop ordenado no compose (HTTP → consumidor → publisher). Limitação do long poll órfão no messaging §4.5. Com 30 mensagens e 3 processos no R03 (M9).)*
+- [x] **SQS-10** Documentados: limites de tentativas, visibility timeout, tratamento de mensagens inválidas, `MessageGroupId` e `MessageDeduplicationId`. *(M5, 29/09: messaging.md §3–§4 e D-12, com a validação dos prazos (`TestValidate_RejectsInvalidValues`) e o contrato de entrada (`TestParseEnvelope`). O README fecha no M10.)*
+- [~] **SQS-11** A concorrência entre as entradas HTTP e SQS foi validada. *(M5, 29/09: os dois canais em sequência (`TestSQSEndToEnd`, `TestConsumeWagerReplayAcrossChannels`) e 10 mensagens da mesma operação em paralelo (`TestConsumeWagerInboxRace`). HTTP e SQS ao mesmo tempo é o C10b (M8).)*
 
 ---
 
 ## 13. Transactional outbox e eventos (§5.4, §6.5, §11)
 
 - [x] **OUT-01** Tabela de outbox com: identidade estável do evento, agregado, tipo, payload (snapshot imutável), `occurredAt`, tentativas, próximo envio e `publishedAt`. *(M2, 29/09: `TestOutboxRepository`, `TestGuardTriggers` (`PDA05`), `TestConstraints`.)*
-- [~] **OUT-02** ⛔ Os registros de outbox são gravados atomicamente com o estado da operação, o saldo, o ledger e a inbox. *(M4, 29/09: outbox na mesma UoW do domínio desde o M3 (I03a `TestFinancialAtomicity`); só linhas confirmadas são publicadas (I05b `TestNoPublishBeforeCommit`). Falta a inbox (M5).)*
+- [~] **OUT-02** ⛔ Os registros de outbox são gravados atomicamente com o estado da operação, o saldo, o ledger e a inbox. *(M4, 29/09: outbox na mesma UoW do domínio desde o M3 (I03a `TestFinancialAtomicity`); só linhas confirmadas são publicadas (I05b `TestNoPublishBeforeCommit`). Falta a inbox (M5).)* *(M5, 29/09: a inbox na mesma UoW: `TestConsumeWagerAtomicInbox`.)*
 - [x] **OUT-03** ⛔ Um worker separado publica a outbox e suporta múltiplos publishers, disputa por registros (ex.: `FOR UPDATE SKIP LOCKED` + lease) e recuperação de trabalho abandonado. *(M4, 29/09: I05a `TestOutboxConcurrentPublishers` (2 publishers com pools próprios, 200 eventos); `TestOutboxStore` (claims concorrentes disjuntos, lease vencido reassumido); I05d `TestOutboxLeaseRecovery`. Com 3 processos no M8 (C06).)*
 - [x] **OUT-04** Retry com backoff em falha de publicação. *(M4, 29/09: I05c `TestOutboxRetryBackoff`; `TestRetryDelay`; `TestPublisherSurvivesClaimFailures`; `TestOutboxBacklogGauges`.)*
 - [x] **OUT-05** Republicações preservam o `eventId`. *(M4, 29/09: `TestSNSSinkPublishInput` (payload da coluna, `MessageDeduplicationId = eventId`); I05a (conteúdo igual ao do banco); I05d (evento reassumido publicado com o mesmo `eventId`).)*
@@ -255,9 +255,9 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 15. Composição e ciclo de vida com Uber Fx (§4)
 
-- [~] **FX-01** Configuração, conexões, repositórios, casos de uso, handlers e workers compostos com `fx.Module`, `fx.Provide` e `fx.Invoke`, com injeção por construtor. *(M0, 29/09: M0: `config`, `observability`, `postgres`, `aws` e `httpapi` com `fx.Module`/`Provide`/`Invoke`; I07a `TestFxGraph`. Completa no M3–M6.)* *(M3, 29/09: `TestFxGraph` com `auth`, `app` e o `httpapi` completo. Workers nos M4–M6.)* *(M4, 29/09: `TestFxGraph` com `OutboxStore`, `Topic` e `outbox.Publisher`.)*
+- [~] **FX-01** Configuração, conexões, repositórios, casos de uso, handlers e workers compostos com `fx.Module`, `fx.Provide` e `fx.Invoke`, com injeção por construtor. *(M0, 29/09: M0: `config`, `observability`, `postgres`, `aws` e `httpapi` com `fx.Module`/`Provide`/`Invoke`; I07a `TestFxGraph`. Completa no M3–M6.)* *(M3, 29/09: `TestFxGraph` com `auth`, `app` e o `httpapi` completo. Workers nos M4–M6.)* *(M4, 29/09: `TestFxGraph` com `OutboxStore`, `Topic` e `outbox.Publisher`.)* *(M5, 29/09: `TestFxGraph` com `ConsumeWager` e `sqsconsumer.Consumer`.)*
 - [x] **FX-02** A inicialização valida a configuração e as dependências (fail fast). *(M0, 29/09: I07c `TestFxFailFast` (banco inacessível, fila inexistente, config inválida); `config_test`; `ServeOnLifecycle` com porta ocupada.)*
-- [~] **FX-03** Workers com cancelamento, prazos de execução e término observável. *(M4, 29/09: publisher com `OnStop` que cancela e espera, logs de início e fim: `TestPublisherStop`, I07b `TestFxLifecycle` (goleak). Consumidor e worker de referências no M5–M6.)*
+- [~] **FX-03** Workers com cancelamento, prazos de execução e término observável. *(M4, 29/09: publisher com `OnStop` que cancela e espera, logs de início e fim: `TestPublisherStop`, I07b `TestFxLifecycle` (goleak). Consumidor e worker de referências no M5–M6.)* *(M5, 29/09: consumidor com shutdown em 5 passos: `TestConsumerShutdown`, I07b.)*
 - [ ] **FX-04** O shutdown interrompe novas entradas e conclui ou libera o trabalho em andamento.
 - [ ] **FX-05** As dependências (pool do PostgreSQL, clientes) só são fechadas depois dos componentes que as usam.
 
@@ -267,7 +267,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 - [ ] **OBS-01** Logs em JSON com `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId`, quando disponíveis.
 - [~] **OBS-02** Logs sem credenciais, dados sensíveis ou payloads financeiros completos. *(M3, 29/09: `TestEdgeAccessLog` (sem token), `problem+json` sem ecoar valores. A prova completa é o I14 (M7).)*
-- [~] **OBS-03** Métricas de: resultados por status, duplicatas, retries, DLQ, conflitos de concorrência, atraso da outbox, latência de processamento e divergências de reconciliação. *(M4, 29/09: as 6 métricas de outbox: `TestMetrics_Outbox`, `TestOutboxBacklogGauges`, I05c, I05d. O resto do catálogo vem no M7.)*
+- [~] **OBS-03** Métricas de: resultados por status, duplicatas, retries, DLQ, conflitos de concorrência, atraso da outbox, latência de processamento e divergências de reconciliação. *(M4, 29/09: as 6 métricas de outbox: `TestMetrics_Outbox`, `TestOutboxBacklogGauges`, I05c, I05d. O resto do catálogo vem no M7.)* *(M5, 29/09: as 9 métricas de SQS: `TestMetrics_SQS`, I04a, I04d, `TestDeadlineRelease`, `TestDLQSendFailure`, `TestDeleteFailureIsCounted`.)*
 - [x] **OBS-04** Health checks (HTTP-08). *(M0, 29/09: ver HTTP-08.)*
 - [ ] **OBS-05** ⭐ Tracing com OpenTelemetry e dashboards.
 
@@ -289,8 +289,8 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [ ] **TST-I01** Migrations: `up` e `down`.
 - [ ] **TST-I02** Constraints e imutabilidade do ledger.
 - [x] **TST-I03** Atomicidade financeira. *(M3, 29/09: I03a `TestFinancialAtomicity` (M2) e I03b `TestPermanentFailureRecorded` (`FAILED` em UoW separada, replay com 500).)*
-- [ ] **TST-I04** Inbox e reentrega.
-- [~] **TST-I05** Outbox concorrente, retry e DLQ. *(M4, 29/09: I05a–g. A DLQ vem no M5.)*
+- [x] **TST-I04** Inbox e reentrega. *(M5, 29/09: I04a–f e os testes do `ConsumeWager` (spec M5 §7).)*
+- [x] **TST-I05** Outbox concorrente, retry e DLQ. *(M4, 29/09: I05a–g. A DLQ vem no M5.)* *(M5, 29/09: DLQ por redrive (I04d) e por envio explícito (I04b, I04c, `TestPermanentFailureToDLQ`).)*
 - [ ] **TST-I06** Recuperação após reinicialização.
 - [ ] **TST-I07** Composição Fx: validação do grafo, start e stop, e liberação dos recursos dos workers (sem goroutines vazadas).
 
@@ -312,7 +312,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [ ] **TST-C08** Após reinício da aplicação, idempotência, pendências e consistência financeira são preservadas. Se houver aceite assíncrono, o processo é interrompido após o `PENDING` e outra instância retoma.
 - [ ] **TST-C09** Ao final de cada cenário, o saldo armazenado é igual a Σ créditos − Σ débitos do ledger.
 - [ ] **TST-C10** Cenários que cruzam HTTP e SQS para a mesma operação.
-- [ ] **TST-C11** Os testes de duplicidade exercitam a deduplicação **da aplicação** (não só a do SQS FIFO), com recebimentos repetidos comprovados.
+- [~] **TST-C11** Os testes de duplicidade exercitam a deduplicação **da aplicação** (não só a do SQS FIFO), com recebimentos repetidos comprovados. *(M5, 29/09: I04a envia a mesma mensagem com `MessageDeduplicationId` diferentes e prova `wager_duplicates_total{sqs,inbox} = 1`. C01b e C10 no M8.)*
 - [ ] **TST-C12** `go test -race` executado nos testes aplicáveis.
 
 ### 17.5 Opcionais

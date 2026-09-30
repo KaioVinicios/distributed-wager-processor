@@ -94,6 +94,7 @@ pda/
 │   │   ├── seal.go                         # sealEvents: eventos do domínio → envelopes com eventId
 │   │   ├── open_wallet.go
 │   │   ├── process_wager.go                # caso de uso único para HTTP, SQS e worker (lifecycle §6)
+│   │   ├── consume_wager.go                # inbox → validação → ProcessWager, com a inbox na mesma UoW (M5)
 │   │   ├── resolve_references.go           # passo do worker (claim → reavaliação)
 │   │   ├── queries.go                      # GetWallet, ListLedger, GetTransaction, GetByExternalID
 │   │   ├── reconcile.go
@@ -148,6 +149,7 @@ pda/
 │   │   │   ├── envelope.go                 # WagerTransactionRequested → wagering.Command
 │   │   │   ├── handler.go                  # inbox → caso de uso → ação na mensagem
 │   │   │   ├── dlq.go                      # envio explícito para a DLQ
+│   │   │   ├── backoff.go                  # retryDelay: min(2^receiveCount s, SQS_RETRY_MAX_DELAY)
 │   │   │   ├── health_gate.go              # pausa por saúde (messaging §4.3)
 │   │   │   ├── module.go
 │   │   │   └── *_test.go / *_integration_test.go
@@ -217,7 +219,8 @@ pda/
 │   │   ├── event_contract.go               # validação dos eventos contra api/events.yaml (M4)
 │   │   ├── events.go                       # tópico + fila de auditoria isolados, com policy e assinatura raw (M4)
 │   │   ├── audit.go                        # coletor da fila de auditoria: WaitFor por eventId, todas as entregas (M4)
-│   │   ├── sqs.go                          # envio de mensagens, leitura de DLQ e auditoria
+│   │   ├── sqs.go                          # envelope WagerTransactionRequested, envio, leitura da DLQ, profundidade e fila drenada (M5)
+│   │   ├── iam.go                          # políticas de deploy/aws/policies renderizadas e usuários IAM do teste (I04f, M5)
 │   │   ├── assert.go                       # AssertWalletConsistent (test-plan §6, itens 1–8), OutboxProblems, OutboxPayloads, SnapshotCounts, Eventually
 │   │   └── cluster.go                      # N processos do binário (e2e)
 │   ├── integration/                        # //go:build integration — cenários entre componentes

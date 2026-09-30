@@ -80,10 +80,11 @@ O isolamento é por banco porque o ledger é append-only e bloqueia `TRUNCATE`. 
 
 | Variável | Produção | Integração | E2E |
 | --- | --- | --- | --- |
-| `SQS_VISIBILITY_TIMEOUT` | 30 s | 3 s | 5 s |
+| `SQS_VISIBILITY_TIMEOUT` | 30 s | 5 s | 5 s |
+| `SQS_PROCESSING_TIMEOUT` | 10 s | 3 s | 3 s |
 | `maxReceiveCount` (provisionado) | 10 | 3 | 3 |
 | `SQS_RETRY_MAX_DELAY` | 300 s | 1 s | 2 s |
-| `SQS_WAIT_TIME` | 20 s | 1 s | 2 s |
+| `SQS_WAIT_TIME` | 20 s | 1 s (0 nos testes de shutdown) | 2 s |
 | `OUTBOX_LEASE` | 30 s | 2 s | 3 s |
 | `OUTBOX_POLL_INTERVAL` | 500 ms | 100 ms | 200 ms |
 | `OUTBOX_RETRY_BASE_DELAY` | 1 s | 100 ms | 200 ms |
@@ -185,6 +186,7 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | I04d | `TestTransientFailureRedrive`: um dublê do caso de uso devolve erro transitório para um `messageId`; depois de 3 recebimentos a mensagem está na DLQ, via redrive | SQS-07, TST-I05 |
 | I04e | `TestBusinessRejectionDeletesMessage`: um BET sem saldo pelo SQS fica `REJECTED` e a mensagem sai da fila, sem ir para a DLQ | SQS-06 |
 | I04f | `TestBrokerPoliciesEnforced`: aplica os documentos de `deploy/aws/policies/` a usuários IAM criados para o teste, sobre recursos isolados. Verifica o que é permitido (provedor envia; serviço consome, altera visibilidade, envia para a DLQ e publica) e o que é negado com `AccessDenied` (provedor consome ou publica, serviço envia na fila de entrada, usuário sem política faz qualquer coisa) | AUTH-09 |
+| I04g | Testes a mais do M5 ([spec](dev/specs/2026-09-29-m5-sqs-consumer-design.md) §7): `TestConsumeWager`, `TestConsumeWagerReplayAcrossChannels`, `TestConsumeWagerAtomicInbox` (com sensibilidade), `TestConsumeWagerInboxRace`, `TestPermanentFailureToDLQ`, `TestGroupOrder`, `TestDeadlineRelease`, `TestHealthGatePauses`, `TestDLQSendFailure`, `TestConsumerShutdown` e `TestSQSEndToEnd` | SQS-02..07, SQS-09 |
 | I05a | `TestOutboxConcurrentPublishers`: 2 publishers em processo, cada um com seu pool, e 200 eventos em 20 grupos. Todos são publicados, todo `eventId` aparece na fila de auditoria com o payload idêntico ao do banco (comparado como JSON), e nenhum fica pendente | TST-I05, OUT-03, OUT-05 |
 | I05b | `TestNoPublishBeforeCommit`: um `uow.Do` insere na outbox e fica bloqueado antes do commit. Em 2 s, nada chega à fila de auditoria; depois do commit, o evento chega. Sensibilidade: um decorador que publica dentro do `Insert` faz o teste falhar | OUT-10, E8 |
 | I05c | `TestOutboxRetryBackoff`: um `Sink` que falha nas 3 primeiras chamadas e depois delega ao SNS real faz `attempts` chegar a 3, respeita `next_attempt_at` (intervalos ≥ `base × 2ⁿ`), grava `last_error` e publica | OUT-04 |

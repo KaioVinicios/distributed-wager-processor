@@ -113,7 +113,7 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 
 **Cobre:** OUT-03, OUT-04, OUT-05, OUT-07, OUT-10; parciais: OUT-02 (inbox no M5), OUT-06 (C05c/C06 no M8), TST-I05 (DLQ no M5), OBS-03, FX-01, FX-03. **Eliminatório: E8.** Spec: [`dev/specs/2026-09-29-m4-outbox-publisher-design.md`](dev/specs/2026-09-29-m4-outbox-publisher-design.md) · plano: [`dev/plans/2026-09-29-m4-outbox-publisher.md`](dev/plans/2026-09-29-m4-outbox-publisher.md).
 
-#### M5 — Consumidor SQS (~3 h)
+#### M5 — Consumidor SQS (~3 h) — ✅ concluído em 29/09
 
 - Adapter `sqsconsumer`:
   - pollers, lotes agrupados por `MessageGroupId`, inbox na mesma UoW (o `InboxRepository` e o `app.ErrInboxDuplicate` já existem desde o M2) e `DeleteMessage` após o commit;
@@ -122,7 +122,14 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 - Testes I04a–f.
 - **Pronto desde o M3:** o `ProcessWager` é o caso de uso do consumidor (`Via = SQS`, `CausationID` = `messageId`). O `ProcessRequest` ganha o registro da inbox, gravado na mesma `uow.Do`. O `testkit.StartApp` já cria filas isoladas.
 
-**Cobre:** SQS-*, AUTH-09 (políticas avaliadas pelo MiniStack com `AUTH=true`, provadas pelo I04f). **Eliminatório: E5 (SQS).**
+- **Entregue também:**
+  - o caso de uso `app.ConsumeWager` (inbox → validação → `ProcessWager`, com a inbox em todo caminho de conclusão e a corrida na PK da inbox recomeçando pelo `Find`);
+  - a pausa por saúde acionada por ping, a liberação por prazo (prazo de processamento < visibility) e o short polling com pausa;
+  - as 9 métricas de SQS, incluindo `sqs_delete_errors_total`;
+  - o `testkit` de SQS e IAM, e o `StartApp` com as filas isoladas.
+- **Achado da validação do plano:** um long polling cancelado pelo cliente continua aberto no MiniStack e esconde, por um visibility timeout, a próxima mensagem que ficar visível. Isso explica uma falha intermitente do shutdown (limitação no messaging §4.5) e era a causa do flake do I05b do M4, corrigido no `testkit.Audit.Absent` com um teste que o reproduz (spec, decisões 17 e 18).
+
+**Cobre:** SQS-01..07, SQS-09, SQS-10, AUTH-09 (políticas avaliadas pelo MiniStack com `AUTH=true`, provadas pelo I04f), TST-I04, TST-I05, OUT-02; parciais: SQS-08 (M6), SQS-11 (C10b no M8), TST-C11 (M8), OBS-03, FX-01, FX-03. **Eliminatório: E5 (SQS).** Spec: [`dev/specs/2026-09-29-m5-sqs-consumer-design.md`](dev/specs/2026-09-29-m5-sqs-consumer-design.md) · plano: [`dev/plans/2026-09-29-m5-sqs-consumer.md`](dev/plans/2026-09-29-m5-sqs-consumer.md).
 
 #### M6 — Worker de referências (~1,5 h)
 
@@ -213,6 +220,8 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | Payload da outbox comparado byte a byte | Republicação "diferente" do `MarshalJSON` | `JSONB` normaliza o texto; o contrato é o JSON lido da coluna (data-model §3.5), e os testes comparam como JSON |
 | ~~`time.Duration` codificado como `interval` no pgx~~ | Erro no claim ou na falha | ✅ Descartado no M4: o pgx codifica sem ajuste (`TestOutboxStore`) |
 | ~~Testes publicando os eventos do ambiente de desenvolvimento~~ | Eventos do banco `pda` somem da auditoria | ✅ Tratado no M4: todo teste que sobe o publisher tem banco próprio |
+| ~~Flake do I05b (`TestNoPublishBeforeCommit`)~~ | Evento "não entregue" em 1 de 4 execuções completas | ✅ Tratado no M5: o `Audit.Absent` cancelava um long poll no meio, e o poll órfão pegava o evento (`TestAuditAbsentLeavesNoPollBehind`) |
+| Long poll órfão no shutdown do consumidor | Mensagem liberada volta só depois de um visibility timeout | Aceito e documentado (messaging §4.5): sem perda nem duplicidade |
 | Estouro de prazo | Checkpoint do dia não atingido | Ordem de corte (§4), sempre preservando os eliminatórios |
 
 ---
@@ -225,7 +234,7 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | E2 Acesso não autorizado | M3 ✅ | M3 (A02a–c, A03) |
 | E3 Ponto flutuante | M1 ✅ | M1 (U01a–g, com o U01g analisando a AST) |
 | E4 Saldo negativo por concorrência | M2 ✅ (constraint) + M3 | M2 (I02a, `CHECK`), M3 (C02 em processo), M8 (C02, C10b) |
-| E5 Movimentação duplicada | M3 ✅ (HTTP) + M5 | M3 (C01a em processo, I22), M5 (I04a), M8 (C01, C05, C10) |
+| E5 Movimentação duplicada | M3 ✅ (HTTP) + M5 ✅ | M3 (C01a em processo, I22), M5 (I04a), M8 (C01, C05, C10) |
 | E6 Idempotência só em memória | M2 ✅ (índices únicos) + M3 ✅ | M2 (I02a, I18), M3 (I10, I21), M6 (I06), M8 (C08) |
 | E7 Dependência de instância única | M3–M6 | M8 (cluster com 3 processos) |
 | E8 Publicação antes do commit | M4 ✅ | M4 (I05b) |
