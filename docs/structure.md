@@ -255,7 +255,7 @@ pda/
 │   ├── development-workflow.md             # spec → plano → TDD → verificação (regras de qualidade)
 │   ├── structure.md
 │   ├── stack.md
-│   ├── testing.md                          # (M10) preparação e execução dos testes — DOC-04
+│   ├── testing.md                          # preparação e execução dos testes — DOC-04
 │   ├── load-test.md ⭐
 │   └── dev/                                # anotações do desenvolvedor (ver §6)
 │       ├── specs/                          # specs por marco (superpowers:brainstorming)
@@ -276,7 +276,7 @@ pda/
 ├── go.sum
 ├── LICENSE
 ├── Makefile
-└── README.md                               # (M10)
+└── README.md                               # execução, configuração, exemplos e testes — DOC-01, DOC-05
 ```
 
 ---

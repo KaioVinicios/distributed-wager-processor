@@ -347,7 +347,7 @@ Registrada automaticamente para toda carteira criada via `testkit`. Executada no
 - [ ] `make test-integration` e `make test-e2e` verdes a partir de `make infra-up`.
 - [ ] Cada linha das tabelas §5 e §7 implementada, ou registrada como não concluída no `ARCHITECTURE.md`, com o motivo.
 - [ ] `gofmt -l .` vazio e `go vet` (com e sem tags) sem avisos.
-- [ ] O README documenta os comandos deste plano e o tempo aproximado de cada nível.
+- [x] O README documenta os comandos deste plano e o tempo aproximado de cada nível (M10: `README.md` §9, com os tempos medidos; os detalhes em [`testing.md`](testing.md)).
 
 **Prioridade se o prazo apertar**, em ordem:
 1. Os testes que comprovam eliminatórios (§7).
