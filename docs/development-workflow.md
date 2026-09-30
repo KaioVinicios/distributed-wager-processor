@@ -44,12 +44,14 @@ flowchart LR
 | M6 — worker de referências | *architectural* | ✅ | ✅ | ✅ | |
 | M7 — observabilidade | *architectural* | ✅ | ✅ | ✅ | |
 | M8 — harness e2e | *architectural* | ✅ | ✅ | ✅ | Os testes cobrem comportamento já existente, então vale a checagem de sensibilidade (§4.3) |
-| M9 — resiliência | *bounded* | Design curto no chat | — | ✅ | Os fluxos já existem, então é *bounded*. Checagem de sensibilidade obrigatória |
+| M9 — resiliência | *bounded* | ✅ (curta) | ✅ (curto) | ✅ | Os fluxos já existem, então é *bounded*; spec e plano curtos, como toda tarefa de código. Checagem de sensibilidade obrigatória |
 | M10 — documentação de entrega | — | — | Roteiro no chat | — | É documentação. A verificação acontece no M11 |
 | M11 — verificação a partir de um clone limpo | — | — | — | — | `verification-before-completion` do começo ao fim |
 | M12 — opcionais | Classificar na hora | Conforme o caminho | Conforme o caminho | ✅ | |
 
-**Correções no meio do caminho:** um bug ou ajuste pontual depois que o código existe segue o caminho *bounded*: design curto no chat, aprovação, e TDD começando por um teste que reproduz o problema. Se aparecer uma complexidade escondida, o trabalho sobe de caminho (*bounded* → *architectural*), nunca desce.
+**Correções no meio do caminho:** um bug ou ajuste pontual depois que o código existe também passa por **spec → plano → TDD** (decisão do autor em 29/09/2026): spec e plano curtos, proporcionais ao ajuste, mas escritos em `docs/dev/specs|plans/` e aprovados. O TDD começa por um teste que reproduz o problema. Se aparecer uma complexidade escondida, o trabalho sobe de caminho (*bounded* → *architectural*), nunca desce.
+
+**Regra para o agente:** o fluxo está resumido em [`.claude/rules/development-workflow.md`](../.claude/rules/development-workflow.md), carregado automaticamente pelo Claude Code, e o plugin *superpowers* é dependência do projeto em [`.claude/settings.json`](../.claude/settings.json).
 
 ---
 
