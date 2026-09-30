@@ -154,12 +154,19 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
 - **Documentação:** limitação do healthcheck com `HTTP_ENABLED=false`, I25 descrito como teste de ligação, evidência do OBS-02 corrigida, contagem dupla das pendências no §13.2 e o ajuste 6 na spec do M7.
 - [Spec](specs/2026-09-30-m7-review-fixes-design.md) → [plano](plans/2026-09-30-m7-review-fixes.md), aprovados juntos a pedido do autor.
 
+## 30/09/2026 (qua): bancos de teste, `DROP` intermitente
+
+- **Investigação:** o log do PostgreSQL tinha 7 falhas de `permission denied to terminate process` em 6 pacotes, não só no teste de migrations. As outras eram engolidas pelo `cleanup` do `NewEnv`/`NewTestEnv`, que só imprimia: 9 bancos `pda_t_*` órfãos. O código do PostgreSQL 18 (`TerminateOtherDBBackends`) mostrou a causa: com `FORCE`, o `DROP` checa a permissão de encerrar todo processo ligado ao banco, e `pda_owner` não tem `pg_signal_backend`. O autovacuum (medido com log temporário: 43 ações em bancos de teste em 4 execuções) e os backends `pda_app` ainda saindo disparavam a falha. O `DROP` sem `FORCE` encerra o autovacuum sozinho e espera 5 s.
+- **Correção:** `DROP` sem `FORCE`; uma sessão `pda_owner` que sobre é encerrada com `pg_terminate_backend` e o `DROP` é repetido; o `cleanup` devolve o erro (`TestMain` sai com 1, `NewTestEnv` usa `tb.Errorf`). Testes I28–I30.
+- **Achado da execução:** o plano previa repetir com `FORCE` depois da espera, mas o I29 falhou uma vez assim: durante os 5 s o autovacuum volta ao banco, e o `FORCE` bate na mesma checagem. O `FORCE` saiu de vez (ruling registrado).
+- **Limpeza:** os bancos órfãos (os 9 da investigação, mais os deixados pelas falhas de hoje e pelos reds e sabotagens desta correção) foram apagados pelo superusuário do compose, com a lista conferida antes.
+
 ## Onde paramos
 
 - **M7 concluído (commits aguardando autorização).** Próximo passo: **M8, harness e2e e cenários multi-instância**, começando pela spec.
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - decidir se os 3 minors do M0 entram em algum marco;
-  - **flake em investigação (M7, 30/09):** `TestMigrationsUpDownUp` (`internal/adapters/postgres`) falhou uma vez em três execuções completas do `make test-integration`, com `drop database: testkit: DROP: ERROR: permission denied to terminate process (SQLSTATE 42501)`. Passou nas duas execuções seguintes e, isolado, passa com e sem as mudanças do M7. Não toca em código do marco; hipótese não verificada: outra conexão do pacote em paralelo segurando o banco de teste na hora do `DROP`. Autor decidiu não investigar agora; se voltar a aparecer, reproduzir com `-count` alto no pacote e olhar as conexões abertas em `pg_stat_activity` antes do `DROP`;
+  - **flake do `TestMigrationsUpDownUp`: resolvido em 30/09** ([spec](specs/2026-09-30-test-db-drop-design.md)). Não era um flake do teste, mas um defeito do `testkit` que afetava todos os pacotes: o `DROP … WITH (FORCE)` falhava ao acaso, e fora do teste de migrations a falha era silenciosa;
   - minors adiados na revisão do M2: inbox aceita instantes zerados; repositórios sobre o pool podem escrever fora do UoW (só a convenção da D-14 impede). O filtro de ID malformado de `List`/`Sum`/`AdvanceDependents` ficou resolvido no M3, pelos casos de uso (decisão 8);
   - minors adiados na revisão do M3: o log de acesso gravava `route` vazio e o WARN da reconciliação registrava os saldos (ambos resolvidos no M7); o `settleAndPersist` com `insert = false` ganhou teste no M6 (`TestResolveReferences`).

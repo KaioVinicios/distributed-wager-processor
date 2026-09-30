@@ -69,10 +69,10 @@ Sobe com `make infra-up`. Os testes usam apenas a infraestrutura do compose e **
 ### 3.2 Isolamento por pacote (`testkit.NewEnv`)
 
 Chamado no `TestMain` de cada pacote com tag:
-1. Cria o banco `pda_t_<pacote>_<rand>` como `pda_owner` (que tem `CREATEDB`) e aplica as migrations embutidas com `golang-migrate` + `iofs`. Isso também exercita as migrations (TST-I01). Como o `TestMain` não tem `testing.TB`, a assinatura é `testkit.NewEnv(ctx, pkg) (*Env, func(), error)`, e a função devolvida faz a limpeza.
+1. Cria o banco `pda_t_<pacote>_<rand>` como `pda_owner` (que tem `CREATEDB`) e aplica as migrations embutidas com `golang-migrate` + `iofs`. Isso também exercita as migrations (TST-I01). Como o `TestMain` não tem `testing.TB`, a assinatura é `testkit.NewEnv(ctx, pkg) (*Env, func() error, error)`, e a função devolvida faz a limpeza e devolve o erro: o `TestMain` sai com código 1 se ela falhar, e o `NewTestEnv` a reporta com `tb.Errorf`.
 2. Cria `wager-<rand>.fifo`, `wager-dlq-<rand>.fifo` (redrive com `maxReceiveCount = 3`), o tópico `events-<rand>.fifo` e a fila de auditoria assinante.
 3. Devolve uma `config.Config` apontando para esses recursos, com os tempos acelerados de §3.3.
-4. No fim, derruba o banco e apaga filas e tópico. Com `PDA_TEST_KEEP=1`, mantém tudo para inspeção.
+4. No fim, derruba o banco e apaga filas e tópico. Com `PDA_TEST_KEEP=1`, mantém tudo para inspeção. O `DROP DATABASE` é feito **sem `FORCE`**: o PostgreSQL encerra o autovacuum do banco e espera até 5 s pelas sessões que estão saindo. O `FORCE` exigiria de `pda_owner` o privilégio `pg_signal_backend` para cada processo ligado, e falhava ao acaso diante de um worker de autovacuum ou de um backend `pda_app` ainda saindo. Uma sessão de `pda_owner` que sobrar é encerrada com `pg_terminate_backend`, e o `DROP` é repetido ([spec](dev/specs/2026-09-30-test-db-drop-design.md)).
 
 O isolamento é por banco porque o ledger é append-only e bloqueia `TRUNCATE`. Um banco novo por pacote é a forma de "limpar" sem abrir exceção nas proteções.
 
@@ -229,6 +229,9 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | I25 | `TestMetricsEndpoint` (`test/integration`), **teste de ligação** (as séries também crescem por outros testes paralelos; a semântica exata está nos U20, U23 e nos testes do edge): depois de um fluxo (BET, replay, rejeição, 401, 403, rota inexistente, reconciliação), a `/metrics` da porta admin cresce em `wager_transactions_total`, `wager_duplicates_total`, `auth_failures_total`, `reconciliation_runs_total` e `http_requests_total` (com o padrão da rota e `unmatched`); a porta da API responde 404 em `/metrics` | OBS-03 |
 | I26 | `TestConcurrencyConflictMetric`: com a linha da carteira travada por outra transação, o BET termina em 503 e `concurrency_conflicts_total{reason="lock_timeout"}` cresce | OBS-03, CONC-01 |
 | I27 | `TestFxRoles` (`bootstrap`): com o consumidor, o publisher ou o worker desligados, o app sobe e o `/health/ready` continua reportando PostgreSQL e SQS `UP`; com o HTTP desligado, só o admin responde | FX-01, HTTP-08, OBS-04 |
+| I28 | `TestDropWaitsForExitingSessions` (`testkit`): uma sessão `pda_app` que fecha 300 ms depois do início do `drop` não impede a remoção do banco | TST-I* (infraestrutura) |
+| I29 | `TestDropEndsLeftoverOwnerSession` (`testkit`): uma sessão `pda_owner` esquecida é encerrada, e o banco é removido depois da espera de 5 s | TST-I* (infraestrutura) |
+| I30 | `TestNewEnvCleanupReportsDropFailure` (`testkit`): com uma sessão `pda_app` viva, o `cleanup` devolve o erro do `DROP` em vez de só imprimi-lo | TST-I* (infraestrutura) |
 | — | `TestOutboxProblemsDetectsDivergence` (`postgres`, banco próprio, triggers desligados): sensibilidade do item 7 do §6, cada divergência da matriz do lifecycle §7 é reportada | TST-C09 |
 
 ### 5.3 Autenticação e autorização (TST-A)

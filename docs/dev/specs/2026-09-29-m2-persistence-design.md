@@ -251,7 +251,7 @@ As migrations `000001`–`000006` transcrevem o data-model §3–§5, e `migrati
   2. conecta como `pda_owner` no banco `pda` (`localhost:5432`) e cria `pda_t_<pkg>_<8 hex>`;
   3. aplica as migrations embutidas (`golang-migrate` + `iofs`, URL `pgx5://`);
   4. abre `App` (`pda_app`) e `Owner` (`pda_owner`) no banco novo;
-  5. a função de cleanup fecha os pools e executa `DROP DATABASE … WITH (FORCE)`, exceto com `PDA_TEST_KEEP=1`.
+  5. a função de cleanup fecha os pools e executa `DROP DATABASE … WITH (FORCE)`, exceto com `PDA_TEST_KEEP=1`. *(30/09: `DROP` sem `FORCE` e erro devolvido; ver a [spec](2026-09-30-test-db-drop-design.md).)*
 - `Env` expõe `AppURL`, `OwnerURL`, `App`, `Owner *pgxpool.Pool` e `Config() config.Config` (`DatabaseURL` = `AppURL`, `DBLockTimeout` = 2 s).
 - **Arquivos:** `NewEnv` em `test/testkit/env.go`, que no M4/M5 também cria as filas. `testkit.NewDatabase(ctx, pkg)` fica em `test/testkit/postgres.go` e faz a criação e a migração; o I01 a usa porque precisa de um banco só seu. O `AppDatabaseURL` do M0 continua lá, usado pelos testes do `bootstrap`.
 - `testkit.LedgerProblems(ctx, pool, walletID) ([]string, error)`: a parte SQL da verificação de consistência (test-plan §6, itens 2–6); nenhum problema = consistente. O M3 acrescenta os itens 1 e 7.
