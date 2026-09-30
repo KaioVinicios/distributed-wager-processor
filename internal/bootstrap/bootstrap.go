@@ -23,7 +23,8 @@ import (
 func Options() []fx.Option {
 	roles, err := config.RolesFromEnv()
 	if err != nil {
-		return []fx.Option{fx.NopLogger, fx.Error(err)}
+		// No fx.WithLogger yet: Fx's console logger reports the error on stderr.
+		return []fx.Option{fx.Error(err)}
 	}
 	return OptionsFor(roles)
 }
