@@ -524,7 +524,7 @@ O [`docs/delivery-requirements.md`](docs/delivery-requirements.md) liga cada req
 - **Escrita fora do UoW:** os repositórios sobre o pool, usados nas leituras, também expõem escritas. Só a convenção da D-14 impede usá-los fora de um `uow.Do`.
 - **Log do healthcheck:** o healthcheck do Docker gera uma linha de log de acesso do `/health/ready` em INFO a cada 5 s por réplica.
 
-**Verificação a partir de um clone limpo** (M11): é o passo seguinte a este documento. O que ela encontrar é corrigido ou registrado aqui.
+**Verificação a partir de um clone limpo** (M11, 30/09): feita num `git clone` do GitHub, com o ambiente zerado e os caches do Go vazios. A subida, os exemplos do README, os comandos do desafio, o `make check` e as suítes de integração e e2e passaram. Os três achados eram do README e do `scripts/get-token.sh` e foram corrigidos. Nenhum ficou pendente.
 
 ---
 

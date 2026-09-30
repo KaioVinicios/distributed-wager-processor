@@ -234,13 +234,29 @@ Testes R01–R04: queda do PostgreSQL, queda do SQS e shutdown gracioso com HTTP
   - a tabela de métricas do §13.2 estava partida em duas por uma linha em branco;
   - no `README`, o `unpause` precisa ser um serviço por comando (o achado do M9 também vale para o uso manual).
 
-#### M11 — Verificação a partir de um clone limpo (~1 h)
+#### M11 — Verificação a partir de um clone limpo (~1 h) — ✅ concluído em 30/09
 
 1. Fazer `git clone` do repositório em um diretório temporário.
 2. Executar `docker compose up --build`.
 3. Rodar os exemplos do README.
 4. Rodar `go test ./...`, `go test -race ./...`, `go vet ./...`, `gofmt -l .`, `make test-integration` e `make test-e2e`.
 5. Tudo o que falhar é corrigido ou documentado.
+
+- **Como foi feito** (roteiro no chat, aprovado pelo autor):
+  - `docker compose down -v` do ambiente de desenvolvimento, porque o compose fixa o projeto `pda` e as portas;
+  - `git clone` do GitHub (`49c647f`) no scratchpad;
+  - imagem compilada com `--no-cache` e `GOCACHE`/`GOMODCACHE` vazios;
+  - os blocos `sh` do README extraídos do próprio arquivo e executados como estão escritos, em `bash` e em `zsh`.
+- **Resultado:**
+  - `up --build --wait` saudável em 44 s (build frio da imagem: 34 s);
+  - `go test ./...` 32 s e `go test -race ./...` 36 s, frios e com saída 0; `go vet` sem avisos; `gofmt -l .` vazio;
+  - `make check` 25 s, `make test-integration` 48 s e `make test-e2e` 140 s, todos com saída 0;
+  - nenhum link relativo quebrado nos `.md`, as 8 imagens fixadas existem no registry e o clone termina sem alterações.
+- **Achados, todos corrigidos pela exceção do §4.4** ([`development-workflow.md`](development-workflow.md)):
+  - o `scripts/get-token.sh` não terminava a saída com quebra de linha, e os tokens da §7 saíam colados. O autor aprovou `scripts/*.sh` como exceção, validada pelos exemplos do README;
+  - na §8.5, a consulta logo depois da BET chegava antes do worker, que conclui em ~0,3 s, e mostrava `PENDING_REFERENCE`. O exemplo ganhou um `sleep 1`;
+  - na §8.9, cada réplica expõe só os próprios contadores, e as três linhas do exemplo saíram na `app-1` por sorte. O exemplo passou a ler as 3 réplicas;
+  - também na §8.9, o README avisa que a ordem entre eventos da mesma carteira não é estrita com vários publishers (messaging §7), algo já documentado mas que o exemplo não mostrava.
 
 #### M12 — Folga / opcionais (restante)
 

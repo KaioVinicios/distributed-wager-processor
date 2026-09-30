@@ -218,9 +218,34 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
   - `migrate-down`/`migrate-up`.
 - **Decisão do autor:** o reprocessamento da DLQ não é exigido pelo desafio. Como o MiniStack não implementa `StartMessageMoveTask`, fica documentado, sem script (D-12).
 
+## 30/09/2026 (qua): M11, verificação a partir de um clone limpo
+
+- Roteiro no chat, aprovado pelo autor. O M11 não tem spec nem TDD: é `verification-before-completion` do começo ao fim ([`development-workflow.md`](../development-workflow.md) §2).
+- **"Do zero", na escolha do autor:**
+  - `docker compose down -v` do ambiente de desenvolvimento, porque o compose fixa o projeto `pda` e as portas;
+  - `git clone` do GitHub (`49c647f`) no scratchpad;
+  - `docker compose build --no-cache`;
+  - `GOCACHE`/`GOMODCACHE` vazios;
+  - as imagens base já baixadas ficaram, mas cada tag fixa foi conferida no registry.
+- **Prova:**
+  - `up --build --wait` saudável em 44 s;
+  - os 4 comandos do desafio com saída 0 (32 s e 36 s frios);
+  - `make check` (25 s), `make test-integration` (48 s, 22 pacotes) e `make test-e2e` (140 s), todos com saída 0;
+  - a §6 do README passou pelas versões 6→5→6→3→nenhuma→6;
+  - 477 links relativos sem quebra e as 8 imagens existentes;
+  - `git status --porcelain` vazio no fim e nenhum banco `pda_t_*` sobrando.
+- **Método dos exemplos:** os blocos `sh` das §5, §7 e §8 foram extraídos do próprio `README.md` por script e executados sem adaptação, em `bash` e em `zsh`. Um script é mais rápido que uma pessoa digitando, e isso expôs duas dependências de tempo que a execução manual do M10 escondia.
+- **Achados, corrigidos pela exceção do §4.4:**
+  - o `get-token.sh` não terminava a saída com quebra de linha. O autor aprovou `scripts/*.sh` como exceção;
+  - a §8.5 consultava o REFUND antes do worker (~0,3 s);
+  - a §8.9 lia as métricas só da `app-1`, e as três linhas do exemplo tinham saído nela por sorte;
+  - a §8.9 também passou a avisar que a ordem dos eventos da mesma carteira não é estrita.
+
+  Cada correção foi validada aplicando o diff no clone e rodando os exemplos de novo.
+
 ## Onde paramos
 
-- **M10 concluído (commits aguardando autorização).** Próximo passo: **M11, verificação a partir de um clone limpo** (`git clone` num diretório temporário, `docker compose up --build`, os exemplos do README e os comandos de teste). O que falhar é corrigido ou registrado no `ARCHITECTURE.md` §17.
+- **M11 concluído (commits aguardando autorização).** Todos os marcos M0–M11 estão fechados. Depois do M11, o ambiente de desenvolvimento volta a subir a partir do repositório original (o `aws-init` regenera o `.local/aws/credentials`). Próximo passo: **M12, opcionais**, se houver folga (teste de carga, OpenTelemetry, dashboard).
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - **os 3 minors do M0: resolvidos em 30/09** ([spec](specs/2026-09-30-m0-minors-design.md));

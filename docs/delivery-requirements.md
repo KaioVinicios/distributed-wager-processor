@@ -52,7 +52,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [x] **ART-08** `README.md` completo (ver DOC-01). *(M10, 30/09: `README.md`, com os exemplos executados contra o compose; ver DOC-01.)*
 - [x] **ART-09** `ARCHITECTURE.md` completo (ver DOC-02). *(M10, 30/09: revisão final contra o código (testes e métricas citados conferidos) e §16–§18 fechadas; ver DOC-02 e DOC-03.)*
 - [x] **ART-10** `.env.example` com valores locais e nenhum segredo real. *(M0, 29/09: `.env.example` só com valores locais; chaves AWS fora dele (geradas pelo `aws-init`).)*
-- [~] **ART-11** Os comandos abaixo, ou equivalentes documentados, funcionam a partir de um checkout limpo:
+- [x] **ART-11** Os comandos abaixo, ou equivalentes documentados, funcionam a partir de um checkout limpo:
   ```sh
   docker compose up --build
   go test ./...
@@ -61,6 +61,8 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
   ```
 
   *(M10, 30/09: os 4 comandos passam no repositório (`go test ./...` e `go test -race ./...` com saída 0, `go vet ./...` sem avisos, `docker compose up --build --wait` saudável); a execução a partir de um clone limpo é o M11.)*
+
+  *(M11, 30/09: num `git clone` do GitHub (`49c647f`), com o volume do PostgreSQL apagado, a imagem compilada sem cache e os caches do Go vazios: `docker compose up --build --wait` saudável em 44 s; `go test ./...` e `go test -race ./...` com saída 0 (21 pacotes); `go vet ./...` sem avisos; `gofmt -l .` vazio; `make check`, `make test-integration` (22 pacotes) e `make test-e2e` com saída 0. O clone continuou sem alterações (`git status --porcelain` vazio).)*
 
 ---
 
@@ -325,7 +327,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 18. Documentação da entrega (§15)
 
-- [x] **DOC-01** O `README.md` cobre: pré-requisitos, variáveis de ambiente, inicialização das filas, aplicação e reversão das migrations, execução da aplicação, exemplos de chamadas (incluindo como obter o token) e comandos de teste. *(M10, 30/09: `README.md` §1–§9, com os comandos e exemplos executados contra o compose e os tempos dos testes medidos; a execução a partir de um clone limpo é o M11.)*
+- [x] **DOC-01** O `README.md` cobre: pré-requisitos, variáveis de ambiente, inicialização das filas, aplicação e reversão das migrations, execução da aplicação, exemplos de chamadas (incluindo como obter o token) e comandos de teste. *(M10, 30/09: `README.md` §1–§9, com os comandos e exemplos executados contra o compose e os tempos dos testes medidos; a execução a partir de um clone limpo é o M11.)* *(M11, 30/09: os exemplos das §5–§8 rodaram tal como estão escritos, em `bash` e em `zsh`, num clone limpo. Três ajustes vieram daí: o `get-token.sh` passou a terminar a saída com quebra de linha, a §8.5 espera o worker concluir o REFUND e a §8.9 lê as métricas das 3 réplicas.)*
 - [x] **DOC-02** O `ARCHITECTURE.md` registra as decisões sobre: dinheiro, transações, idempotência, locks, referências pendentes, reversões, inbox/outbox, autenticação, autorização, uso do Fx e shutdown. Também reúne as justificativas pedidas ao longo do desafio (IdP, biblioteca de banco, mapeamento de Money, fronteira transacional, concorrência, máquina de estados, falhas transitórias vs permanentes, hash, códigos HTTP, parâmetros SQS e roteamento de eventos). *(M10, 30/09: `ARCHITECTURE.md` §2–§14, revisado contra o código.)*
 - [x] **DOC-03** O `ARCHITECTURE.md` explicita limitações, interpretações adotadas e trabalho não concluído. *(Interpretações e limitações escritas em 28/09; trabalho não concluído é fechado na entrega.)* *(M10, 30/09: §15 (18 interpretações), §16 (18 limitações) e §17 (opcionais não feitos, fora do escopo e pendências menores).)*
 - [x] **DOC-04** Há um documento separado sobre como preparar as dependências dos testes e executar a integração, as múltiplas instâncias e as simulações de falha, incluindo build tags, se usadas. *(M10, 30/09: `docs/testing.md`, com as simulações manuais de queda do PostgreSQL e do MiniStack executadas no compose.)*
