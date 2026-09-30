@@ -221,7 +221,7 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | Chaves IAM aleatórias no emulador | App sem credenciais válidas depois de recriar o MiniStack | O `aws-init` reescreve `.local/aws/credentials` a cada execução, e as réplicas dependem dele (`service_completed_successfully`) |
 | Keycloak lento para subir (30–60 s) | Timeout no `compose up` | Healthcheck em `/health/ready` do Keycloak, `--wait` e `start_period` generoso |
 | Testes de concorrência instáveis | Falhas intermitentes | Barreira de largada, `Eventually` com prazo e repetição N× com carteiras novas (test-plan §1) |
-| Deadlock entre o worker de referências e o HTTP | `40P01` nos testes | Ordem fixa de lock: carteira → transação ([`data-model.md`](data-model.md) §6) |
+| ~~Deadlock entre o worker de referências e o HTTP~~ | `40P01` nos testes | ✅ Tratado no M6: ordem fixa de lock, carteira → transação ([`data-model.md`](data-model.md) §6), provada por `TestResolveReferencesLockOrder` |
 | Relógios divergentes entre instâncias | `updated_at < created_at` rejeitado pelo banco ou na reidratação | ✅ Tratado no M1: `updatedAt` tem `createdAt` como piso (`TestTransitionClockSkew`, `TestWalletDebit`) |
 | ~~Erro de invariante do domínio tratado como transitório (D-05)~~ | 503 repetido em vez de `FAILED` | ✅ Tratado no M3: `domainError` traduz todo erro do domínio (U13), e um overflow de crédito vira `FAILED` (I21) |
 | ~~Corrida entre as duas leituras de idempotência~~ | 409 indevido com a mesma chave | ✅ Tratado no M3: a transação da mesma chave é replay (I22, C01a) |
