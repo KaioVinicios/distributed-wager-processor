@@ -3,7 +3,6 @@ package testkit
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -22,8 +21,8 @@ type Env struct {
 }
 
 // NewEnv is called from TestMain, which has no testing.TB. cleanup closes the
-// pools and drops the database.
-func NewEnv(ctx context.Context, pkg string) (env *Env, cleanup func(), err error) {
+// pools and drops the database; its error is the caller's to report.
+func NewEnv(ctx context.Context, pkg string) (env *Env, cleanup func() error, err error) {
 	db, drop, err := NewDatabase(ctx, pkg)
 	if err != nil {
 		return nil, nil, err
@@ -39,12 +38,10 @@ func NewEnv(ctx context.Context, pkg string) (env *Env, cleanup func(), err erro
 		_ = drop()
 		return nil, nil, fmt.Errorf("testkit: owner pool: %w", err)
 	}
-	cleanup = func() {
+	cleanup = func() error {
 		app.Close()
 		owner.Close()
-		if err := drop(); err != nil {
-			fmt.Fprintln(os.Stderr, "testkit: drop database:", err)
-		}
+		return drop()
 	}
 	return &Env{DB: db, App: app, Owner: owner}, cleanup, nil
 }
@@ -60,7 +57,11 @@ func NewTestEnv(tb testing.TB, name string) *Env {
 	if err != nil {
 		tb.Fatalf("testkit.NewEnv: %v", err)
 	}
-	tb.Cleanup(cleanup)
+	tb.Cleanup(func() {
+		if err := cleanup(); err != nil {
+			tb.Errorf("testkit: drop database %s: %v", env.DB.Name, err)
+		}
+	})
 	return env
 }
 

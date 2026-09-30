@@ -20,7 +20,7 @@ func TestMain(m *testing.M) {
 	os.Exit(run(m))
 }
 
-func run(m *testing.M) int {
+func run(m *testing.M) (code int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	env, cleanup, err := testkit.NewEnv(ctx, "integration")
@@ -28,7 +28,14 @@ func run(m *testing.M) int {
 		fmt.Fprintln(os.Stderr, "testkit.NewEnv:", err)
 		return 1
 	}
-	defer cleanup()
+	defer func() {
+		if err := cleanup(); err != nil {
+			fmt.Fprintln(os.Stderr, "testkit: cleanup:", err)
+			if code == 0 {
+				code = 1
+			}
+		}
+	}()
 	app, stop, err := env.StartApp(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "testkit.StartApp:", err)

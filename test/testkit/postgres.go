@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -16,6 +17,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5" // registers the pgx5:// driver
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/KaioVinicios/pda/migrations"
@@ -76,7 +78,7 @@ func NewDatabase(ctx context.Context, name string) (db *Database, drop func() er
 		// Detached: the caller's context may be done by the time it cleans up.
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		return adminExec(ctx, admin, "DROP DATABASE "+ident+" WITH (FORCE)")
+		return dropDatabase(ctx, admin, db.Name)
 	}
 	m, err := db.Migrator()
 	if err != nil {
@@ -106,6 +108,31 @@ func (d *Database) Migrator() (*migrate.Migrate, error) {
 }
 
 func closeMigrator(m *migrate.Migrate) { _, _ = m.Close() }
+
+// dropDatabase drops the database without FORCE: PostgreSQL then ends the
+// autovacuum workers attached to it and waits up to 5 s for the other
+// sessions to exit. FORCE is never used: it checks the permission to end
+// every attached process, and pda_owner lacks pg_signal_backend, so an
+// autovacuum worker or a backend still exiting made it fail at random. A
+// session still alive after the wait (55006, object in use) is ended only if
+// it is pda_owner's own, which needs no extra privilege, and the drop is
+// retried once.
+func dropDatabase(ctx context.Context, admin, name string) error {
+	ident := pgx.Identifier{name}.Sanitize()
+	err := adminExec(ctx, admin, "DROP DATABASE "+ident)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "55006" {
+		return err
+	}
+	if err := adminExec(ctx, admin, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+		WHERE datname = `+quoteLiteral(name)+` AND usename = current_user AND pid <> pg_backend_pid()`); err != nil {
+		return err
+	}
+	return adminExec(ctx, admin, "DROP DATABASE "+ident)
+}
+
+// quoteLiteral quotes a database name already checked by dbName.
+func quoteLiteral(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 
 func adminExec(ctx context.Context, dsn, sql string) error {
 	conn, err := pgx.Connect(ctx, dsn)

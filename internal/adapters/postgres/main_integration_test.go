@@ -25,6 +25,11 @@ func TestMain(m *testing.M) {
 	}
 	env = e
 	code := m.Run()
-	cleanup()
+	if err := cleanup(); err != nil {
+		fmt.Fprintln(os.Stderr, "testkit: cleanup:", err)
+		if code == 0 {
+			code = 1
+		}
+	}
 	os.Exit(code)
 }
