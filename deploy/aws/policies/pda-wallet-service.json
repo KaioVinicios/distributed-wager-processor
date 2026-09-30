@@ -8,7 +8,7 @@
       "Action": ["sqs:SendMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"],
       "Resource": "${DLQ_ARN}" },
     { "Sid": "PublishEvents", "Effect": "Allow",
-      "Action": "sns:Publish",
+      "Action": ["sns:Publish", "sns:GetTopicAttributes"],
       "Resource": "${TOPIC_ARN}" }
   ]
 }
