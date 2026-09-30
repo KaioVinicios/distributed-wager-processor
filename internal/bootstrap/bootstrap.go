@@ -18,22 +18,56 @@ import (
 	"github.com/KaioVinicios/pda/internal/observability"
 )
 
-// Options returns the application modules in registration order (D-15):
-// dependencies first, then the workers (references, outbox, consumer), HTTP last, so it starts last and stops
-// first; the workers stop before the pool and the AWS clients close.
+// Options returns the application modules for the roles of the environment
+// (D-15). A malformed role variable aborts the start with an error that names it.
 func Options() []fx.Option {
-	return []fx.Option{
+	roles, err := config.RolesFromEnv()
+	if err != nil {
+		return []fx.Option{fx.NopLogger, fx.Error(err)}
+	}
+	return OptionsFor(roles)
+}
+
+// OptionsFor returns the application modules in registration order (D-15):
+// dependencies first, then the enabled workers (references, outbox, consumer),
+// HTTP last, so it starts last and stops first; the workers stop before the
+// pool and the AWS clients close. A disabled role leaves its module out of the
+// graph. The admin server and the observability module are always present.
+func OptionsFor(roles config.Roles) []fx.Option {
+	opts := []fx.Option{
 		fx.StopTimeout(config.MaxShutdownTimeout),
 		fx.WithLogger(func(log *slog.Logger) fxevent.Logger { return &fxevent.SlogLogger{Logger: log} }),
+		fx.Supply(roles),
 		config.Module,
 		observability.Module,
 		postgres.Module,
 		awsclient.Module,
-		auth.Module,
-		appModule,
-		references.Module,
-		outbox.Module,
-		sqsconsumer.Module,
-		httpapi.Module,
+	}
+	if roles.HTTP {
+		opts = append(opts, auth.Module)
+	}
+	opts = append(opts, appModule)
+	if roles.ReferenceWorker {
+		opts = append(opts, references.Module)
+	}
+	if roles.OutboxPublisher {
+		opts = append(opts, outbox.Module)
+	}
+	if roles.Consumer {
+		opts = append(opts, sqsconsumer.Module)
+	}
+	if roles.HTTP {
+		opts = append(opts, httpapi.Module)
+	}
+	return append(opts, fx.Invoke(logRoles))
+}
+
+// logRoles records which roles this instance runs; with none, only the admin
+// server is up, which is valid but rarely intended.
+func logRoles(roles config.Roles, log *slog.Logger) {
+	log.Info("roles resolved", "http", roles.HTTP, "consumer", roles.Consumer,
+		"outboxPublisher", roles.OutboxPublisher, "referenceWorker", roles.ReferenceWorker)
+	if roles == (config.Roles{}) {
+		log.Warn("every role is disabled: only the admin server runs")
 	}
 }

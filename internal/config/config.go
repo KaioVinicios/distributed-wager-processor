@@ -100,12 +100,13 @@ func flatten(err error) []error {
 	return []error{err}
 }
 
-// envVarOf maps a Config field name to its environment variable.
+// envVarOf maps a Config or Roles field name to its environment variable.
 func envVarOf(field string) string {
-	f, ok := reflect.TypeFor[Config]().FieldByName(field)
-	if !ok {
-		return field
+	for _, t := range []reflect.Type{reflect.TypeFor[Config](), reflect.TypeFor[Roles]()} {
+		if f, ok := t.FieldByName(field); ok {
+			name, _, _ := strings.Cut(f.Tag.Get("env"), ",")
+			return name
+		}
 	}
-	name, _, _ := strings.Cut(f.Tag.Get("env"), ",")
-	return name
+	return field
 }
