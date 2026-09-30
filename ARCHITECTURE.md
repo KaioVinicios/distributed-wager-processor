@@ -127,7 +127,7 @@ Detalhes: [`docs/data-model.md`](docs/data-model.md) e [`docs/decisions.md`](doc
 **Decisão:** **lock pessimista por carteira.** Cada operação financeira define o `lock_timeout` local da transação (`DB_LOCK_TIMEOUT`, padrão 5 s, por `set_config`, o `SET LOCAL` parametrizável) e faz `SELECT … FROM wallets WHERE id = $1 FOR UPDATE`.
 
 - **Sem lost update:** o lock serializa os escritores da mesma carteira. O `UPDATE` ainda confere `version = $old`, como segunda proteção, e o `CHECK (balance_minor >= 0)` é a última linha de defesa.
-- **Sem lock global:** carteiras diferentes não disputam nada e avançam em paralelo. Um teste segura o lock da carteira X e confirma que operações na carteira Y seguem normalmente.
+- **Sem lock global:** carteiras diferentes não disputam nada e avançam em paralelo. Com 3 processos, um teste segura o lock da carteira X e confirma que um BET na carteira Y conclui em menos de 1 s, enquanto o de X espera (C03b `TestNoGlobalLock`); 20 carteiras recebem 10 BETs simultâneos cada (C03a).
 - **Sem deadlock:**
   - cada operação trava uma única carteira;
   - o worker de referências trava sempre **carteira → transação**, na mesma ordem do caminho HTTP;
@@ -136,7 +136,7 @@ Detalhes: [`docs/data-model.md`](docs/data-model.md) e [`docs/decisions.md`](doc
 - **Contenção extrema:** um lock timeout é tratado como falha **transitória**: HTTP 503 com `Retry-After`, ou retry no SQS. A métrica `concurrency_conflicts_total` é incrementada.
 - **Por que não controle otimista:** sob disputa real (o caso 100 vs 2×80), o otimista gera conflitos e retries que precisariam de limite e métricas próprios. O pessimista é determinístico e deixa o `balanceBefore` do ledger trivialmente correto.
 
-**Caso obrigatório:** carteira com 100.00 e duas apostas simultâneas de 80.00. A primeira trava, debita e deixa 20.00. A segunda espera o lock, lê 20.00 e é `REJECTED` com `INSUFFICIENT_FUNDS`. Resultado: um débito no ledger, saldo 20.00, e os reenvios devolvem os mesmos resultados.
+**Caso obrigatório:** carteira com 100.00 e duas apostas simultâneas de 80.00. A primeira trava, debita e deixa 20.00. A segunda espera o lock, lê 20.00 e é `REJECTED` com `INSUFFICIENT_FUNDS`. Resultado: um débito no ledger, saldo 20.00, e os reenvios devolvem os mesmos resultados. Provado com as duas apostas em processos diferentes, 20 vezes (C02 `TestTwoBetsCompete`), e com uma aposta por HTTP e outra pelo SQS paradas no lock da carteira e soltas juntas (C10b `TestHTTPAndSQSConcurrent`).
 
 Detalhes: [`docs/decisions.md`](docs/decisions.md) D-09.
 
@@ -350,7 +350,7 @@ O Fx executa os `OnStart` na ordem de registro e os `OnStop` na ordem inversa. A
 3. **Publisher e worker de referências:** param de reservar trabalho e terminam o item atual. Um lease reservado e não publicado vence e é reassumido por outra instância. O worker para depois do publisher: os eventos do último item dele ficam na outbox e são publicados por outra instância ou no próximo start.
 4. **Dependências:** o pool do PostgreSQL e os clientes AWS (conexões ociosas do cliente HTTP do SDK) são fechados **depois** que todos os componentes que os usam terminaram. O teste I07b verifica isso com `goleak`.
 
-**Encerramento abrupto (`SIGKILL`) é seguro por construção:** nada é removido do SQS sem commit, o lease da outbox expira e as pendências ficam agendadas no banco. Isso é demonstrado com pontos de falha injetados nos testes e2e.
+**Encerramento abrupto (`SIGKILL`) é seguro por construção:** nada é removido do SQS sem commit, o lease da outbox expira e as pendências ficam agendadas no banco. Os testes e2e demonstram isso com um cluster de 3 processos e pontos de falha que encerram a instância com o código 137 no lugar exato (`internal/faultinject`, só no binário compilado com a tag `faultinject`): consumidor antes do commit e entre o commit e o `DeleteMessage` (C05b, C05a), HTTP entre o commit e a resposta (C05c), publisher com o evento reservado e entre a publicação e a confirmação (C06b, C06a), worker com a pendência reservada (C08b), e as 3 instâncias mortas com `SIGKILL` e reiniciadas (C08a).
 
 ---
 

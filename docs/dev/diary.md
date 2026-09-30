@@ -161,9 +161,24 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
 - **Achado da execução:** o plano previa repetir com `FORCE` depois da espera, mas o I29 falhou uma vez assim: durante os 5 s o autovacuum volta ao banco, e o `FORCE` bate na mesma checagem. O `FORCE` saiu de vez (ruling registrado).
 - **Limpeza:** os bancos órfãos (os 9 da investigação, mais os deixados pelas falhas de hoje e pelos reds e sabotagens desta correção) foram apagados pelo superusuário do compose, com a lista conferida antes.
 
+## 30/09/2026 (qua): M8, harness e2e e cenários multi-instância
+
+- [Spec](specs/2026-09-30-m8-e2e-harness-design.md) → [plano](plans/2026-09-30-m8-e2e-harness.md) → execução inline com TDD.
+- **Escolhas do autor na spec:** extrair um `Harness` que o `App` e o `Cluster` embutem; um cluster por pacote no `TestMain` (crash em sequência, vazão em paralelo); round-robin só entre instâncias vivas.
+- **Entregue:**
+  - `internal/faultinject` e os 6 pontos de falha, todos em adaptadores;
+  - o `testkit.Harness` (extração sem mudar nenhum teste de integração), o `testkit.Cluster` (build com `-tags faultinject -race`, kill/stop/restart, logs, recusa de data race nos filhos), o `EnvOf` e o `Client.Try`;
+  - `test/e2e` com os 16 testes C e os 2 do próprio harness, `make test-e2e` e o job no CI.
+- **Achados da execução:**
+  - **o C10b do plano não provava nada:** a barreira no envio não faz HTTP e SQS se encontrarem, porque o SQS entrega depois de o HTTP responder; sem o `FOR UPDATE` o teste passava. Virou uma barreira no banco (os dois canais parados no lock da carteira e soltos juntos), e agora a sabotagem é detectada;
+  - a sabotagem planejada do C03b (`SHARE ROW EXCLUSIVE`) não bloqueava nada; a certa é `EXCLUSIVE`;
+  - três ajustes pequenos: `transactionOf` antecipado (lint `unused`), três `//nolint:gosec` desnecessários, e o `grep -c` sobre binário que no macOS não imprime nada (`grep -ac`).
+- **I17 intermitente (fora do M8, corrigido em seguida):** o `TestDomainFlowsPersist` falhou 1 vez na verificação. A asserção da antecipação comparava o `next_attempt_at` com o horário agendado originalmente e perdia a corrida contra o relógio sob carga; reproduzido 3 de 3 com um atraso de 200 ms. Passou a exigir o instante de conclusão do `bet-3` ([spec](specs/2026-09-30-i17-anticipation-flake-design.md) → [plano](plans/2026-09-30-i17-anticipation-flake.md)).
+- **Prova:** cada teste C visto falhando pelo motivo certo (os 6 pontos de falha) ou pela sabotagem registrada no `// Sensitivity:`; 4 sabotagens do harness detectadas, inclusive uma data race num processo filho.
+
 ## Onde paramos
 
-- **M7 concluído (commits aguardando autorização).** Próximo passo: **M8, harness e2e e cenários multi-instância**, começando pela spec.
+- **M8 concluído (commits aguardando autorização).** Todos os eliminatórios estão cobertos. Próximo passo: **M9, resiliência (R01–R04)**, começando pela spec; o helper `docker compose pause|unpause` entra lá.
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - decidir se os 3 minors do M0 entram em algum marco;

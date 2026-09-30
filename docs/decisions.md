@@ -475,6 +475,14 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
 | E2E / multi-instância | `go test -tags=e2e -race -p 1 -timeout 15m ./test/e2e/...` | A infraestrutura do compose, com 3 processos do binário iniciados pelo próprio teste (banco e filas isolados) |
 
 - **Injeção de falhas:** o pacote `faultinject` só funciona quando o binário é compilado com `-tags faultinject`; no build normal ele não faz nada. Os pontos de falha são habilitados por env, por exemplo `PDA_FAULT=consumer.after_commit_before_delete`, e causam `os.Exit(137)` para simular uma interrupção abrupta. A lista completa de pontos está em `test-plan.md` §4.
+- **Delta do M8** (spec [`dev/specs/2026-09-30-m8-e2e-harness-design.md`](dev/specs/2026-09-30-m8-e2e-harness-design.md)):
+  - todos os pontos de falha vivem em **adaptadores**, então a regra de dependência do [`structure.md`](structure.md) §2 não muda: o `app` continua com `domain/*`, `apperrors` e stdlib. O ponto do consumidor antes do commit fica no caminho de escrita do `uow.Do`, no adapter `postgres`;
+  - um ponto **dispara sempre na primeira passagem** e mata o processo; não há contador nem filtro por operação;
+  - os cenários de crash usam as flags de papel (D-15) como bisturi: o componente em teste fica ligado só na instância com a falha armada, e outra instância o reassume depois. É o que torna determinístico quem pega cada mensagem, evento ou pendência;
+  - o cliente do cluster distribui em round-robin só entre instâncias **vivas e desarmadas** (`test-plan.md` §3.4).
+  - o cluster reprova o pacote se qualquer processo registrar `WARNING: DATA RACE` ou sair de um stop gracioso com código diferente de 0: o detector de corrida do binário de teste não enxerga os processos filhos (TST-C12);
+  - o ambiente dos processos do cluster é montado do zero a partir da `config.Config` (`testkit.EnvOf`), sem herdar o do teste;
+  - "HTTP e SQS ao mesmo tempo" (C10b) é garantido por uma barreira **no banco**, com os dois canais parados no lock da carteira e soltos juntos: uma barreira no envio não faz os canais se encontrarem, porque o SQS entrega depois de o HTTP responder (achado da execução).
 - **Duplicidade no SQS:** os testes enviam reentregas com `MessageDeduplicationId` diferentes, ou após a janela de deduplicação. Assim a deduplicação exercitada é a da aplicação (inbox e idempotência), e não a do FIFO (TST-C11).
 - **Invariante final em todos os cenários:** `stored == Σ créditos − Σ débitos` (TST-C09).
 

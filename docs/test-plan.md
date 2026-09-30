@@ -100,14 +100,22 @@ O isolamento é por banco porque o ledger é append-only e bloqueia `TRUNCATE`. 
 ### 3.4 Cluster e2e (`testkit.Cluster`)
 
 - No `TestMain`, o binário é compilado **uma vez**: `go build -tags faultinject -race -o $TMP/pda ./cmd/pda`.
-- `cluster.Start(3)` inicia 3 processos no host, com portas HTTP e de métricas distintas, o mesmo banco e as mesmas filas isoladas, e espera `/health/ready` de cada um. Cada processo tem seu próprio pool de conexões e sua própria memória (CONC-04).
+- `env.StartCluster(ctx, 3)` inicia 3 processos no host, com portas HTTP e de métricas distintas, o mesmo banco e as mesmas filas isoladas, e espera `/health/ready` de cada um. Cada processo tem seu próprio pool de conexões e sua própria memória (CONC-04). O ambiente de cada processo é derivado da própria `config.Config` (`testkit.EnvOf`, por reflexão sobre as tags `env:`), com os tempos da coluna **E2E** de §3.3, de modo que o cluster não possa divergir do app em processo.
+- **Um cluster por pacote**, criado no `TestMain` e compartilhado. Os cenários que matam uma instância **não** usam `t.Parallel()`, então o escalonador do Go os roda em sequência antes de retomar os paralelos e nenhum deles se sobrepõe a outro teste; cada um restaura num `defer` a instância que tocou.
+- Toda instância mantém o HTTP ligado, porque a prontidão é sempre `/health/ready` (com `HTTP_ENABLED=false` não há rotas de health, D-15). O bisturi dos cenários de crash é o papel do componente em teste.
 - **Operações:**
   - `Kill(i)` envia `SIGKILL`, um encerramento abrupto;
   - `Stop(i)` envia `SIGTERM` e espera a saída;
-  - `Restart(i, env)` reinicia o processo com outro ambiente, por exemplo com ou sem ponto de falha;
-  - `Instance(i).Client()` devolve um cliente HTTP apontado para aquela instância.
-- Os logs de cada processo vão para `t.TempDir()` e são anexados à saída quando o teste falha.
-- Para simular indisponibilidade, o harness executa `docker compose pause|unpause postgres|ministack`.
+  - `Restart(i, env…)` reinicia o processo com outro ambiente, por exemplo com ou sem ponto de falha, ou com um papel desligado;
+  - `Instance(i).Client()` devolve um cliente HTTP apontado para aquela instância, e `Instance(i).WaitExit`/`AssertFaultHit` cobram o encerramento;
+  - o cliente do cluster distribui as requisições em round-robin **só entre as instâncias vivas e sem ponto de falha armado**: um alvo morto responderia `connection refused`, e um alvo armado morreria no item errado.
+- **Papéis como bisturi:** com 3 consumidores, 3 publishers e 3 workers iguais, quem pega cada mensagem, evento ou pendência é sorteio. Um cenário de crash deixa o componente ligado **só** na instância com a falha armada, deixa-a morrer e religa o componente em outra instância. Sem isso, o cenário passaria ou falharia por acaso.
+- Os logs de cada processo ficam em memória (para as asserções) e num arquivo do diretório temporário do pacote, anexados à saída quando o teste falha. O `TestMain` não tem `testing.TB`, então o diretório é do pacote, não `t.TempDir()`.
+- **O cluster para antes da limpeza do banco.** Um processo filho ainda conectado como `pda_app` faria o `DROP` de §3.2 falhar com `55006` e reprovar o pacote, então o `stop` do cluster roda antes do `cleanup` do `NewEnv` (ordem dos `defer` no `TestMain`).
+- `Restore` devolve o cluster ao estado base: reinicia só as instâncias que saíram ou rodam com override, registra no log do teste as execuções substituídas se ele falhou, e termina com `AssertAllReady`. Os testes de crash o chamam num `defer`.
+- **Data race nos processos filhos reprova o pacote:** o detector do binário do teste não enxerga os filhos. O `Close` do cluster recusa código de saída diferente de 0 num stop gracioso (o detector sai com 66) e qualquer `WARNING: DATA RACE` no log de qualquer execução de qualquer instância.
+- O ambiente de cada processo é montado do zero, sem herdar o do teste (um `AWS_PROFILE` do desenvolvedor impediria a instância de subir).
+- Para simular indisponibilidade, o harness executa `docker compose pause|unpause postgres|ministack` (M9, testes R).
 
 ---
 
@@ -121,7 +129,7 @@ O pacote `internal/faultinject` tem duas implementações:
 
 | Ponto | Local exato | Simula |
 | --- | --- | --- |
-| `consumer.before_commit` | Dentro de `uow.Do`, depois de todas as escritas e antes do `COMMIT` | Crash antes do commit |
+| `consumer.before_commit` | Dentro de `uow.Do`, depois de todas as escritas e antes do `COMMIT` (no adapter `postgres`, só no caminho de escrita: um `Snapshot` de leitura não o dispara) | Crash antes do commit |
 | `consumer.after_commit_before_delete` | Depois do `COMMIT`, antes do `DeleteMessage` | Crash entre o commit e a remoção (TST-C05) |
 | `http.after_commit_before_response` | Depois do `COMMIT`, antes de escrever a resposta | O cliente não recebe a resposta e reenvia |
 | `outbox.after_claim_before_publish` | Depois do commit do claim, antes do `Publish` | Crash com evento reservado |
@@ -129,6 +137,8 @@ O pacote `internal/faultinject` tem duas implementações:
 | `references.after_claim` | Worker: depois de travar a pendência, antes de resolver | Crash do worker (TST-C08) |
 
 O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no log do processo e o exit code 137. Sem isso, o teste falha, para não passar por acaso.
+
+Um ponto dispara **sempre na primeira passagem**, sem contador nem filtro por operação: o processo morre, então "uma vez" e "sempre" coincidem. Como o ponto do `uow.Do` vale para toda escrita, um ponto armado pode disparar num item de preparação em vez do item do cenário; é por isso que o cenário isola o componente por papel e que a instância armada fica fora do round-robin (§3.4).
 
 ---
 
@@ -176,6 +186,9 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 | U24 | `TestMainReportsInvalidRole` (`cmd/pda`, revisão do M7): o processo real com `HTTP_ENABLED=talvez-42` sai com código 1 e nomeia a variável no stderr, sem o valor | FX-02 |
 | U25 | `TestFailureLogsCarryTheMessageIDs` (`sqsconsumer`, revisão do M7): retry transitório e envio à DLQ registram `sqsMessageId`, `messageId`, `correlationId`, `walletId` e `providerId`; mensagem ilegível só com o `sqsMessageId`; `walletId` gigante cortado em 128 caracteres | OBS-01 |
 | U26 | `TestPublisherLogsCarryTheEventIDs` (`outbox`, revisão do M7): falha de publicação e de confirmação registram `eventId`, `walletId` e `correlationId` | OBS-01 |
+| U27 | M8, `faultinject`: `TestParse` e `TestTrigger` (a lógica que o build com a tag liga a `PDA_FAULT`, stderr e `os.Exit`: `FAULT_HIT <ponto>` e 137 só no ponto habilitado) e `TestPointIsNoOpWithoutTag` (sem a tag, um ponto habilitado não faz nada) | D-19, §4 |
+| U28 | M8, `testkit`: `TestEnvOf` (o ambiente escrito para os processos do cluster, lido pela mesma biblioteca do binário, devolve a `Config` e os `Roles`) | spec M8, decisão 6 |
+| U29 | M8, `testkit`: `TestHarnessPick` (round-robin só entre instâncias vivas e desarmadas) e `TestClientTryReportsTransportError` | TST-C04 |
 
 ### 5.2 Integração (TST-I)
 
@@ -248,7 +261,11 @@ O harness confirma que a falha realmente aconteceu: exige a linha `FAULT_HIT` no
 
 ### 5.4 Concorrência e recuperação (TST-C) — e2e com 3 instâncias
 
-Todos rodam com `cluster.Start(3)`, distribuindo as requisições entre as instâncias em round-robin, a menos que o teste indique outra coisa. O C01a e o C02 também rodam **em processo** desde o M3 (`test/integration/`), como verificação antecipada do E4 e do E5 pelo HTTP.
+Todos rodam sobre o cluster de 3 processos do `TestMain` (`env.StartCluster(ctx, 3)`), distribuindo as requisições entre as instâncias em round-robin, a menos que o teste indique outra coisa. O C01a e o C02 também rodam **em processo** desde o M3 (`test/integration/`), como verificação antecipada do E4 e do E5 pelo HTTP. Os arquivos de cada teste estão em [`structure.md`](structure.md) §1.
+
+**O harness em si** (M8): `TestClusterSpreadsRequests` (6 leituras dão 2 a cada instância, lidas da `/metrics` de cada uma) e `TestClusterInstanceLifecycle` (instância morta ou armada fora do round-robin, parada limpa com código 0, reinício na mesma porta sem conexão velha, e o ambiente do desenvolvedor sem chegar aos processos). O `TestMain` reprova o pacote se qualquer processo registrar data race (C12).
+
+**C10b, "ao mesmo tempo" de verdade** (achado da execução do M8): uma barreira no envio não basta, porque o SQS entrega bem depois de o HTTP responder. O teste trava a linha da carteira, envia a mensagem, espera o consumidor bloquear no lock, envia o HTTP, espera-o bloquear também e solta o lock (`raceBehindLock`). Como conta as esperas por lock do banco, o C10b roda sem `t.Parallel()`.
 
 | ID | Teste | Procedimento | Asserções | Cobre |
 | --- | --- | --- | --- | --- |

@@ -176,7 +176,9 @@ pda/
 │   └── faultinject/
 │       ├── faultinject.go                  # API: faultinject.Point("consumer.after_commit_before_delete")
 │       ├── faultinject_on.go               # //go:build faultinject → os.Exit(137) quando habilitado
-│       └── faultinject_off.go              # //go:build !faultinject → no-op
+│       ├── faultinject_off.go              # //go:build !faultinject → no-op
+│       ├── faultinject_test.go             # U27: parse e trigger (a lógica sem a tag)
+│       └── noop_test.go                    # U27: sem a tag, um ponto habilitado não faz nada
 │
 ├── migrations/
 │   ├── embed.go                            # package migrations: //go:embed *.sql → FS
@@ -207,7 +209,9 @@ pda/
 ├── test/
 │   ├── testkit/                            # utilitários compartilhados (sem build tag)
 │   │   ├── env.go                          # NewEnv: banco isolado por pacote (M2); NewTestEnv: banco de um teste só (M4)
+│   │   ├── harness.go                      # Harness: infraestrutura e helpers comuns a App e Cluster (Client em round-robin entre alvos vivos, OpenWallet, AssertWalletConsistent, SendWager) (M8)
 │   │   ├── app.go                          # StartApp(ctx, opts...): Fx em processo com filas e tópico isolados, logs capturados, cliente por identidade e Audit; as opções ajustam a config antes do start
+│   │   ├── configenv.go                    # EnvOf: struct com tags env: → variáveis de ambiente dos processos filhos (M8)
 │   │   ├── root.go                         # RepoRoot: raiz do módulo (go.mod)
 │   │   ├── dotenv.go                       # lê .env.example (+ .env) para os testes
 │   │   ├── awscreds.go                     # lê .local/aws/credentials (profiles IAM do aws-init)
@@ -223,9 +227,19 @@ pda/
 │   │   ├── sqs.go                          # envelope WagerTransactionRequested, envio, leitura da DLQ, profundidade e fila drenada (M5)
 │   │   ├── iam.go                          # políticas de deploy/aws/policies renderizadas e usuários IAM do teste (I04f, M5)
 │   │   ├── assert.go                       # AssertWalletConsistent (test-plan §6, itens 1–8), OutboxProblems, OutboxPayloads, SnapshotCounts, Eventually
-│   │   └── cluster.go                      # N processos do binário (e2e)
+│   │   └── cluster.go                      # N processos do binário: build, start, Kill/Stop/Restart, Instance, logs e código de saída (e2e, M8)
 │   ├── integration/                        # //go:build integration — cenários entre componentes
 │   ├── e2e/                                # //go:build e2e — multi-instância, falhas, resiliência
+│   │   ├── main_test.go                    # TestMain: banco isolado + cluster de 3 processos, parado antes da limpeza do banco
+│   │   ├── cluster_test.go                 # o próprio harness: distribuição, instância morta/parada/armada, ambiente isolado
+│   │   ├── idempotency_test.go             # C01a, C01b
+│   │   ├── concurrency_test.go             # C02, C03a, C03b
+│   │   ├── crash_test.go                   # C05a, C05b, C05c
+│   │   ├── outbox_test.go                  # C06a, C06b
+│   │   ├── references_test.go              # C07a, C07b
+│   │   ├── restart_test.go                 # C08a, C08b
+│   │   ├── channels_test.go                # C10a, C10b
+│   │   └── helpers_test.go                 # corpo das operações e submissão
 │   └── load/ ⭐                            # teste de carga (test-plan §9)
 │
 ├── docs/                                   # documentação do sistema e do projeto

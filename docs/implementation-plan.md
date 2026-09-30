@@ -164,15 +164,26 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 
 **Cobre:** OBS-01..04, FX-01, FX-03, FX-05; FX-04 em processo (R03 e R04 no M9). Spec: [`dev/specs/2026-09-30-m7-observability-design.md`](dev/specs/2026-09-30-m7-observability-design.md) · plano: [`dev/plans/2026-09-30-m7-observability.md`](dev/plans/2026-09-30-m7-observability.md).
 
-#### M8 — Harness e2e e cenários multi-instância (~3 h)
+#### M8 — Harness e2e e cenários multi-instância (~3 h) — ✅ concluído em 30/09
 
-- `faultinject` (on/off) e os pontos de falha de [`test-plan.md`](test-plan.md) §4.
-- `testkit.Cluster`: build, start, kill, stop e restart; `AssertWalletConsistent` completo (§6 do test-plan).
-- Testes C01–C11.
+- `faultinject` (on/off) e os 6 pontos de falha de [`test-plan.md`](test-plan.md) §4, todos em adaptadores.
+- `testkit.Cluster`: build, start, kill, stop e restart; `AssertWalletConsistent` completo (§6 do test-plan) em toda carteira.
+- Testes C01–C11 com 3 processos.
+
+- **Entregue também:**
+  - o `testkit.Harness`, extraído do `App` (banco, filas, tópico, contrato, `Audit` e os helpers), que o `App` em processo e o `Cluster` embutem; nenhum teste de integração mudou;
+  - o round-robin só entre instâncias vivas e desarmadas, o `Client.Try` (resposta que não chega) e o `testkit.EnvOf` (ambiente dos processos derivado da `Config`, com a coluna E2E de §3.3);
+  - a recusa de data race e de saída inesperada em qualquer processo filho (TST-C12), o `Restore` dos testes de crash e o job `e2e` no CI;
+  - `TestClusterSpreadsRequests` e `TestClusterInstanceLifecycle` (o harness provado por ele mesmo).
+- **Decisões da spec:** os cenários de crash usam as flags de papel como bisturi (o componente em teste ligado só na instância com a falha armada), e o ponto `consumer.before_commit` vive no caminho de escrita do `uow.Do`, sem exceção à regra de dependência.
+- **Achados da execução:**
+  - o C10b planejado **não se encontrava**: a barreira no envio não fazia HTTP e SQS concorrerem, porque o SQS entrega depois de o HTTP responder, e o teste passava sem o `FOR UPDATE`. Passou a usar uma barreira no banco (`raceBehindLock`: os dois canais parados no lock da carteira e soltos juntos) e a rodar sem `t.Parallel()`;
+  - a sabotagem planejada para o C03b (`LOCK TABLE … SHARE ROW EXCLUSIVE`) não bloqueava nada, porque esse modo não conflita com o `ROW SHARE` de um `FOR UPDATE`; o lock global realista é `EXCLUSIVE`, detectado;
+  - 3 das 4 diretivas `//nolint:gosec` previstas eram desnecessárias (o `nolintlint` as recusou).
 
 **Pronto quando:** `make test-e2e` passa.
 
-**Cobre:** CONC-04, CONC-06, TST-C*. **Eliminatório: E7.** Com isso, **todos os eliminatórios estão cobertos.**
+**Cobre:** CONC-04, CONC-06, IDEM-01, OUT-06, SQS-11, TX-09, TST-C01..C12. **Eliminatório: E7.** Com isso, **todos os eliminatórios estão cobertos.** Spec: [`dev/specs/2026-09-30-m8-e2e-harness-design.md`](dev/specs/2026-09-30-m8-e2e-harness-design.md) · plano: [`dev/plans/2026-09-30-m8-e2e-harness.md`](dev/plans/2026-09-30-m8-e2e-harness.md).
 
 > **Checkpoint do fim do dia 2:** funcionalidades completas. Dos testes do plano, faltam só os R.
 
@@ -243,6 +254,7 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | Duas instâncias contam a mesma tentativa de uma pendência | Expiração antes do limite | ✅ Tratado no M6: o recheck sob os locks confere status e horário (`TestResolveReferencesSkips`, `TestResolveReferencesConcurrent`) |
 | Deadlock entre o worker e o HTTP por ordem de lock invertida | `40P01` ou lock timeout | ✅ Tratado no M6: carteira → transação, provado por `TestResolveReferencesLockOrder` |
 | ~~`TestMigrationsUpDownUp` falha de forma intermitente~~ | `permission denied to terminate process (42501)` ao derrubar o banco de teste | ✅ Tratado em 30/09: o `DROP … WITH (FORCE)` checa a permissão de encerrar **todo** processo ligado ao banco, e `pda_owner` não tem `pg_signal_backend`; um worker de autovacuum ou um backend `pda_app` ainda saindo fazia o `DROP` falhar, e fora do teste de migrations a falha era silenciosa (bancos órfãos). O `testkit` passou a usar `DROP` sem `FORCE` e o `cleanup` devolve o erro (I28–I30; [spec](dev/specs/2026-09-30-test-db-drop-design.md)) |
+| ~~`TestDomainFlowsPersist` (I17) intermitente~~ | `refund-2 was not advanced` sob carga (1 em 4 execuções completas da integração, na verificação do M8) | ✅ Tratado em 30/09: a asserção comparava a antecipação com o horário agendado originalmente, uma corrida contra o relógio; passou a exigir o instante de conclusão do `bet-3`, que é o que o `AdvanceDependents` grava ([spec](dev/specs/2026-09-30-i17-anticipation-flake-design.md)) |
 | Estouro de prazo | Checkpoint do dia não atingido | Ordem de corte (§4), sempre preservando os eliminatórios |
 
 ---
@@ -254,10 +266,10 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | E1 Autenticação efetiva | M3 ✅ | M3 (A01a, A01b) |
 | E2 Acesso não autorizado | M3 ✅ | M3 (A02a–c, A03) |
 | E3 Ponto flutuante | M1 ✅ | M1 (U01a–g, com o U01g analisando a AST) |
-| E4 Saldo negativo por concorrência | M2 ✅ (constraint) + M3 | M2 (I02a, `CHECK`), M3 (C02 em processo), M8 (C02, C10b) |
-| E5 Movimentação duplicada | M3 ✅ (HTTP) + M5 ✅ | M3 (C01a em processo, I22), M5 (I04a), M8 (C01, C05, C10) |
-| E6 Idempotência só em memória | M2 ✅ (índices únicos) + M3 ✅ | M2 (I02a, I18), M3 (I10, I21), M6 (I06), M8 (C08) |
-| E7 Dependência de instância única | M3–M6 ✅ | M6 (dois workers em processo), M8 (cluster com 3 processos) |
+| E4 Saldo negativo por concorrência | M2 ✅ (constraint) + M3 | M2 (I02a, `CHECK`), M3 (C02 em processo), M8 ✅ (C02 com 3 processos, C10b entre canais) |
+| E5 Movimentação duplicada | M3 ✅ (HTTP) + M5 ✅ | M3 (C01a em processo, I22), M5 (I04a), M8 ✅ (C01a/b, C05a–c, C10a/b) |
+| E6 Idempotência só em memória | M2 ✅ (índices únicos) + M3 ✅ | M2 (I02a, I18), M3 (I10, I21), M6 (I06), M8 ✅ (C05c, C08a) |
+| E7 Dependência de instância única | M3–M6 ✅ | M6 (dois workers em processo), M8 ✅ (cluster com 3 processos: C01–C10, C03b, C06a, C08b) |
 | E8 Publicação antes do commit | M4 ✅ | M4 (I05b) |
 | E9 Ledger auditável | M2 ✅ | M2 (I02b, I02c, I17 com `LedgerProblems`) + test-plan §6 |
 | E10 Mocks no lugar da infraestrutura | M0 (infraestrutura real) | Todos os marcos com testes de integração e e2e |
