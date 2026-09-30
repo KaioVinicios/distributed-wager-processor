@@ -99,9 +99,26 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
   - 6 sabotagens detectadas (entre elas publicar antes do commit, o E8);
   - compose com as 3 réplicas publicando, os eventos de um `POST /wallets` na fila de auditoria e o stop gracioso nos logs.
 
+## 29/09/2026 (ter): M5, consumidor SQS
+
+- [Spec](specs/2026-09-29-m5-sqs-consumer-design.md) → [plano](plans/2026-09-29-m5-sqs-consumer.md) → execução inline com TDD.
+- **Escolhas do autor na spec:** caso de uso `app.ConsumeWager` no `app` (e não a orquestração no adapter); pausa por saúde acionada por ping; prazo de processamento menor que o visibility, com liberação por prazo e tempos de teste de 5 s/3 s.
+- **Validação do plano:** todo o código foi escrito e testado numa cópia descartável antes do plano, inclusive as versões intermediárias do `consumer.go`; a execução no repositório repetiu os mesmos reds e greens.
+- **Entregue:**
+  - o `ConsumeWager` e a inbox em todo caminho de conclusão do `ProcessWager`;
+  - o `adapters/sqsconsumer`: envelope e hash, decisão por resultado, DLQ explícita, backoff, grupos em paralelo com ordem no grupo, pausa por saúde, liberação por prazo e shutdown em 5 passos;
+  - as 9 métricas de SQS e o módulo Fx;
+  - o `testkit` de SQS e IAM, o I04f com as políticas reais e a ponta a ponta pelo SQS.
+- **Achado central:** um long polling cancelado pelo cliente continua aberto no MiniStack e esconde, por um visibility timeout, a próxima mensagem que ficar visível (confirmado com uma sonda). Explica uma falha intermitente do teste de shutdown (limitação documentada) e era a causa do flake do I05b do M4, que também falhava na `main`: corrigido no `Audit.Absent`, com um teste que falha 3 de 3 vezes sem a correção.
+- **Outros achados:** o I04a passava sem o `DeleteMessage` (a redrive drenava a fila) e agora exige a DLQ vazia; short polling ganhou pausa; wait e visibility em segundos inteiros; as mensagens seguintes de um grupo com a cabeça sempre falhando também chegam à DLQ (FIFO).
+- **Prova final:**
+  - `make check` verde e `make test-integration` verde três vezes seguidas;
+  - 15 sabotagens detectadas;
+  - compose com as 3 réplicas consumindo: um BET enviado como `provider-a` processado pelo SQS, eventos publicados com `causationId = messageId`, JSON quebrado na DLQ e o stop ordenado (HTTP → consumidor → publisher).
+
 ## Onde paramos
 
-- **M4 concluído (commits aguardando autorização).** Próximo passo: **M5, consumidor SQS**, começando pela spec.
+- **M5 concluído (commits aguardando autorização).** Próximo passo: **M6, worker de referências**, começando pela spec.
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - decidir se os 3 minors do M0 entram em algum marco;
