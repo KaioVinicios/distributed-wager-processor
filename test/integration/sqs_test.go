@@ -124,3 +124,36 @@ func TestSQSEndToEnd(t *testing.T) {
 		t.Fatalf("HTTP replay of %s, want %s", replay.TransactionID, tx.TransactionID)
 	}
 }
+
+// Covers: SQS-08, OPS-12
+// Sensitivity: a Worker.Run that resolves nothing → waitStatus times out (the REFUND stays PENDING_REFERENCE).
+// The immediate DeleteMessage of a pending is the "pending reference" row of TestDecide (M5); making decide
+// retry it is NOT caught here: the redelivery meets the inbox row as a duplicate and is deleted a second later.
+//
+// A REFUND that arrives over SQS before its BET is recorded as pending and the
+// message is deleted (the inbox says PENDING_REFERENCE); once the BET arrives,
+// the worker resolves it, with no help from the queue.
+func TestSQSPendingReferenceResolved(t *testing.T) {
+	t.Parallel()
+	w := server.OpenWallet(t, testkit.BRL("100.00"))
+	bet, refund := unique("bet"), unique("refund")
+	msgID := unique("msg")
+	server.SendWager(t, sqsWager(t, msgID, wager(w, "provider-a", "REFUND", "30.00", refund, bet)), testkit.SendOpts{GroupID: w.ID})
+
+	tx := transactionOf(t, "provider-a", refund)
+	if tx.Status != "PENDING_REFERENCE" || tx.ReceivedVia != "SQS" {
+		t.Fatalf("operation = %+v, want PENDING_REFERENCE over SQS", tx)
+	}
+	// The BET goes at once: with the test times the REFUND waits well under a second.
+	result(t, server.Client(t, "provider-a"), wager(w, "provider-a", "BET", "30.00", bet, ""), http.StatusOK)
+	done := waitStatus(t, server.Client(t, "provider-a"), "provider-a", refund, "PROCESSED")
+	if done.Balance == nil || done.Balance.Amount != "100.00" || done.ReceivedVia != "SQS" {
+		t.Fatalf("REFUND = %+v, want PROCESSED over SQS with balance 100.00", done)
+	}
+	server.AssertQueueDrained(t) // the message was deleted after the pending commit: the wait was the worker's
+	var outcome string
+	if err := server.Owner().QueryRow(t.Context(),
+		`SELECT outcome FROM inbox_messages WHERE message_id = $1`, msgID).Scan(&outcome); err != nil || outcome != "PENDING_REFERENCE" {
+		t.Fatalf("inbox outcome = %q, %v; want PENDING_REFERENCE", outcome, err)
+	}
+}

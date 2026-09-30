@@ -5,6 +5,7 @@ package integration_test
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/KaioVinicios/pda/test/testkit"
 )
@@ -62,4 +63,24 @@ func balanceOf(t *testing.T, walletID string) testkit.Wallet {
 	var w testkit.Wallet
 	server.Client(t, "wallet-service").Do(t, testkit.Request{Method: http.MethodGet, Path: "/wallets/" + walletID}).JSON(t, &w)
 	return w
+}
+
+// waitStatus polls the operation of provider until it has the status, and
+// returns it. The wait has a deadline: the reference worker resolves within
+// seconds with the test times of test-plan §3.3.
+func waitStatus(t *testing.T, c *testkit.Client, provider, ext, status string) testkit.Transaction {
+	t.Helper()
+	var tx testkit.Transaction
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		resp := c.Do(t, testkit.Request{Method: http.MethodGet, Path: "/providers/" + provider + "/wagering/transactions/" + ext})
+		if resp.Status != http.StatusOK {
+			continue
+		}
+		resp.JSON(t, &tx)
+		if tx.Status == status {
+			return tx
+		}
+	}
+	t.Fatalf("%s %s: not reached within 10s (last seen %q)", ext, status, tx.Status)
+	return tx
 }

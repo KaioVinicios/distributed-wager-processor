@@ -114,10 +114,11 @@ func TestReversalRules(t *testing.T) {
 		wantResult(t, bet, "REJECTED", "INSUFFICIENT_FUNDS", "0.00", false)
 	})
 
-	t.Run("a reversal before its reference waits", func(t *testing.T) {
+	t.Run("a reversal before its reference waits and the worker resolves it (C2)", func(t *testing.T) {
 		t.Parallel()
 		w := server.OpenWallet(t, testkit.BRL("100.00"))
-		pending := result(t, a, wager(w, "provider-a", "REFUND", "10.00", unique("refund"), unique("bet")), http.StatusAccepted)
+		bet, refund := unique("bet"), unique("refund")
+		pending := result(t, a, wager(w, "provider-a", "REFUND", "10.00", refund, bet), http.StatusAccepted)
 		wantResult(t, pending, "PENDING_REFERENCE", "", "", false)
 		var tx testkit.Transaction
 		a.Do(t, testkit.Request{Method: http.MethodGet, Path: "/wagering/transactions/" + pending.TransactionID}).JSON(t, &tx)
@@ -125,6 +126,28 @@ func TestReversalRules(t *testing.T) {
 			tx.Balance != nil || tx.CompletedAt != nil {
 			t.Fatalf("pending operation = %+v", tx)
 		}
+
+		wantResult(t, result(t, a, wager(w, "provider-a", "BET", "10.00", bet, ""), http.StatusOK), "PROCESSED", "", "90.00", false)
+		done := waitStatus(t, a, "provider-a", refund, "PROCESSED")
+		if done.Balance == nil || done.Balance.Amount != "100.00" || done.ReferenceTransactionID == "" {
+			t.Fatalf("resolved operation = %+v, want PROCESSED with balance 100.00 and its reference", done)
+		}
+		if got := balanceOf(t, w.ID); got.Balance != testkit.BRL("100.00") || got.Version != 3 {
+			t.Fatalf("wallet = %+v, want 100.00 v3", got)
+		}
+	})
+
+	t.Run("a REFUND and a ROLLBACK of a WIN or of a REFUND follow the reference kinds", func(t *testing.T) {
+		t.Parallel()
+		w := server.OpenWallet(t, testkit.BRL("100.00"))
+		win, bet, refund := unique("win"), unique("bet"), unique("refund")
+		result(t, a, wager(w, "provider-a", "WIN", "20.00", win, ""), http.StatusOK)
+		wantResult(t, result(t, a, wager(w, "provider-a", "REFUND", "20.00", unique("refund"), win), http.StatusUnprocessableEntity),
+			"REJECTED", "INVALID_REFERENCE_KIND", "120.00", false) // a REFUND reverses a BET only
+		result(t, a, wager(w, "provider-a", "BET", "30.00", bet, ""), http.StatusOK)
+		result(t, a, wager(w, "provider-a", "REFUND", "30.00", refund, bet), http.StatusOK)
+		wantResult(t, result(t, a, wager(w, "provider-a", "ROLLBACK", "30.00", unique("rollback"), refund), http.StatusOK),
+			"PROCESSED", "", "90.00", false)
 	})
 }
 

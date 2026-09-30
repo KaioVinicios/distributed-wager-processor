@@ -18,6 +18,7 @@ import (
 
 	"github.com/KaioVinicios/pda/internal/adapters/awsclient"
 	"github.com/KaioVinicios/pda/internal/bootstrap"
+	"github.com/KaioVinicios/pda/internal/config"
 	"github.com/KaioVinicios/pda/internal/observability"
 )
 
@@ -60,8 +61,10 @@ func (b *syncBuffer) String() string {
 // StartApp starts the application once per package, from TestMain: isolated
 // queues and events topic, the accelerated times of test-plan §3.3, OIDC
 // against the compose Keycloak with a clock skew of 1 s, and the logs captured
-// for assertions. stop stops it and deletes the queues and the topic.
-func (e *Env) StartApp(ctx context.Context) (*App, func(), error) {
+// for assertions. opts adjust the configuration before it is validated (a test
+// that needs another reference schedule). stop stops it and deletes the queues
+// and the topic.
+func (e *Env) StartApp(ctx context.Context, opts ...func(*config.Config)) (*App, func(), error) {
 	awsCfg, err := rootAWS(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -109,6 +112,9 @@ func (e *Env) StartApp(ctx context.Context) (*App, func(), error) {
 	cfg.APIDocsEnabled = true
 	cfg.ReferenceRetryBaseDelay, cfg.ReferenceRetryMaxDelay = 100*time.Millisecond, time.Second
 	cfg.ReferenceMaxAttempts, cfg.ReferenceTTL = 3, 3*time.Second
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	if err := cfg.Validate(); err != nil {
 		removeAWS()
 		return nil, nil, fmt.Errorf("testkit: app config: %w", err)

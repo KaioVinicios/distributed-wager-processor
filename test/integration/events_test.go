@@ -35,8 +35,10 @@ func TestEventContracts(t *testing.T) {
 	for id := range stored {
 		ids = append(ids, id)
 	}
-	if len(ids) != 9 {
-		t.Fatalf("outbox of the wallet has %d events, want 9", len(ids))
+	// The REFUND without a BET waits for its reference; if the worker already
+	// rejected it, its WagerTransactionRejected is a tenth event.
+	if len(ids) != 9 && len(ids) != 10 {
+		t.Fatalf("outbox of the wallet has %d events, want 9 (or 10 once the worker expired the REFUND)", len(ids))
 	}
 	got := server.Audit.WaitFor(t, ids...)
 	seen := map[string]bool{}
