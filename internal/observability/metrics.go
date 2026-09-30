@@ -17,7 +17,8 @@ func NewRegistry() *prometheus.Registry {
 	return reg
 }
 
-// Metrics implements app.Metrics and the outbox publisher's port with
+// Metrics implements app.Metrics and the ports of the outbox publisher and of
+// the SQS consumer with
 // Prometheus collectors. M7 adds the rest of the catalog (ARCHITECTURE.md §13.2).
 type Metrics struct {
 	reconciliationDivergences prometheus.Counter
@@ -28,6 +29,16 @@ type Metrics struct {
 	outboxPending        prometheus.Gauge
 	outboxOldestPending  prometheus.Gauge
 	outboxPublishLatency *prometheus.HistogramVec
+
+	sqsReceived      prometheus.Counter
+	sqsProcessed     *prometheus.CounterVec
+	sqsDuration      *prometheus.HistogramVec
+	wagerDuplicates  *prometheus.CounterVec
+	sqsRetries       *prometheus.CounterVec
+	sqsDLQSent       *prometheus.CounterVec
+	sqsDLQDepth      *prometheus.GaugeVec
+	sqsReceiveErrors prometheus.Counter
+	sqsDeleteErrors  prometheus.Counter
 }
 
 // NewMetrics registers the collectors on reg.
@@ -62,9 +73,48 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 			Help:    "Time from the occurrence of an event to its confirmed publication.",
 			Buckets: prometheus.ExponentialBucketsRange(0.005, 60, 12),
 		}, []string{"event_type"}),
+		sqsReceived: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "sqs_messages_received_total",
+			Help: "Messages received from the wager queue.",
+		}),
+		sqsProcessed: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "sqs_messages_processed_total",
+			Help: "Messages concluded by the wager use case.",
+		}, []string{"outcome"}),
+		sqsDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "sqs_processing_duration_seconds",
+			Help:    "Time to conclude a message, from the start of its processing to its outcome.",
+			Buckets: prometheus.ExponentialBucketsRange(0.005, 10, 12),
+		}, []string{"outcome"}),
+		wagerDuplicates: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "wager_duplicates_total",
+			Help: "Repeated deliveries of an operation, by channel and deduplication layer.",
+		}, []string{"channel", "layer"}),
+		sqsRetries: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "sqs_retries_total",
+			Help: "Messages returned to the queue to be received again.",
+		}, []string{"reason"}),
+		sqsDLQSent: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "sqs_dlq_sent_total",
+			Help: "Messages sent explicitly to the dead-letter queue.",
+		}, []string{"reason"}),
+		sqsDLQDepth: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "sqs_dlq_depth",
+			Help: "Approximate number of messages in the dead-letter queue.",
+		}, []string{"queue"}),
+		sqsReceiveErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "sqs_receive_errors_total",
+			Help: "ReceiveMessage calls that failed.",
+		}),
+		sqsDeleteErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "sqs_delete_errors_total",
+			Help: "DeleteMessage calls that failed after the message was concluded.",
+		}),
 	}
 	reg.MustRegister(m.reconciliationDivergences, m.outboxPublished, m.outboxPublishFailed,
-		m.outboxLeaseReclaims, m.outboxPending, m.outboxOldestPending, m.outboxPublishLatency)
+		m.outboxLeaseReclaims, m.outboxPending, m.outboxOldestPending, m.outboxPublishLatency,
+		m.sqsReceived, m.sqsProcessed, m.sqsDuration, m.wagerDuplicates, m.sqsRetries, m.sqsDLQSent,
+		m.sqsDLQDepth, m.sqsReceiveErrors, m.sqsDeleteErrors)
 	return m
 }
 
@@ -90,3 +140,30 @@ func (m *Metrics) Backlog(pending int, oldestAge time.Duration) {
 	m.outboxPending.Set(float64(pending))
 	m.outboxOldestPending.Set(oldestAge.Seconds())
 }
+
+// Received counts a message received from the wager queue.
+func (m *Metrics) Received() { m.sqsReceived.Inc() }
+
+// Processed counts a message concluded by the use case and its duration.
+func (m *Metrics) Processed(outcome string, d time.Duration) {
+	m.sqsProcessed.WithLabelValues(outcome).Inc()
+	m.sqsDuration.WithLabelValues(outcome).Observe(d.Seconds())
+}
+
+// Duplicate counts a repeated SQS delivery caught by layer (inbox or idempotency).
+func (m *Metrics) Duplicate(layer string) { m.wagerDuplicates.WithLabelValues("sqs", layer).Inc() }
+
+// Retried counts a message returned to the queue.
+func (m *Metrics) Retried(reason string) { m.sqsRetries.WithLabelValues(reason).Inc() }
+
+// SentToDLQ counts an explicit send to the dead-letter queue.
+func (m *Metrics) SentToDLQ(reason string) { m.sqsDLQSent.WithLabelValues(reason).Inc() }
+
+// DLQDepth sets the approximate depth of the dead-letter queue.
+func (m *Metrics) DLQDepth(queue string, n int) { m.sqsDLQDepth.WithLabelValues(queue).Set(float64(n)) }
+
+// ReceiveFailed counts a failed ReceiveMessage.
+func (m *Metrics) ReceiveFailed() { m.sqsReceiveErrors.Inc() }
+
+// DeleteFailed counts a DeleteMessage that failed after the message was concluded.
+func (m *Metrics) DeleteFailed() { m.sqsDeleteErrors.Inc() }
