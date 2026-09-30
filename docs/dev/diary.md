@@ -83,9 +83,25 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
   - cinco sabotagens detectadas;
   - compose com as 3 réplicas saudáveis e o fluxo por `curl` distribuído entre elas.
 
+## 29/09/2026 (ter): M4, outbox publisher
+
+- [Spec](specs/2026-09-29-m4-outbox-publisher-design.md) (com o [`api/events.yaml`](../../api/events.yaml)) → [plano](plans/2026-09-29-m4-outbox-publisher.md) → execução inline com TDD.
+- **Validação do plano:** todo o código foi escrito e testado numa cópia descartável antes do plano, inclusive as versões intermediárias do `publisher.go`; a execução no repositório repetiu os mesmos reds e greens.
+- **Entregue:**
+  - a porta `app.OutboxStore` e o `postgres.OutboxStore` (claim com `SKIP LOCKED` + lease, confirmação e falha condicionais, backlog);
+  - o `adapters/outbox`: publisher por grupos, backoff sem descarte, reclaim, espera no claim com o banco fora, stop gracioso e módulo Fx;
+  - o ARN do tópico resolvido no start (STS + `GetTopicAttributes`) e a política ajustada;
+  - as 6 métricas de outbox;
+  - o contrato `api/events.yaml`, o coletor da fila de auditoria e o item 8 da consistência.
+- **Achado central:** os testes do `bootstrap` usavam o banco compartilhado `pda` e, com o publisher no grafo, publicaram num tópico de teste os eventos pendentes do ambiente de desenvolvimento (12 eventos do fluxo manual do M3 não chegaram à auditoria). Agora têm banco próprio.
+- **Prova final:**
+  - `make check` e `make test-integration` verdes, e mais duas execuções estáveis;
+  - 6 sabotagens detectadas (entre elas publicar antes do commit, o E8);
+  - compose com as 3 réplicas publicando, os eventos de um `POST /wallets` na fila de auditoria e o stop gracioso nos logs.
+
 ## Onde paramos
 
-- **M3 concluído (commits aguardando autorização).** Próximo passo: **M4, outbox publisher**, começando pela spec.
+- **M4 concluído (commits aguardando autorização).** Próximo passo: **M5, consumidor SQS**, começando pela spec.
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - decidir se os 3 minors do M0 entram em algum marco;
