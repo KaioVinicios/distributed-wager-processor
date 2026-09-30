@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/KaioVinicios/pda/internal/app"
+	"github.com/KaioVinicios/pda/internal/faultinject"
 )
 
 // Sink publishes one event to the broker.
@@ -125,6 +126,7 @@ func (p *Publisher) publishBatch(ctx context.Context, batch []app.PendingEvent) 
 // record are detached from ctx's cancellation: once begun, they finish.
 func (p *Publisher) publish(ctx context.Context, e app.PendingEvent) {
 	log := p.eventLog(e)
+	faultinject.Point("outbox.after_claim_before_publish") // crash holding the lease (test-plan §4)
 	pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.opts.Lease/2)
 	err := p.sink.Publish(pubCtx, e)
 	cancel()
@@ -134,6 +136,7 @@ func (p *Publisher) publish(ctx context.Context, e app.PendingEvent) {
 		p.fail(storeCtx, e, err, log)
 		return
 	}
+	faultinject.Point("outbox.after_publish_before_ack") // published, never confirmed: republished (test-plan §4)
 	at, ok, err := p.store.MarkPublished(storeCtx, e.EventID, p.opts.Owner)
 	switch {
 	case err != nil: // the lease expires and the event is republished with the same eventId (OUT-06b)

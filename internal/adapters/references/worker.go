@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/KaioVinicios/pda/internal/app"
+	"github.com/KaioVinicios/pda/internal/faultinject"
 )
 
 const (
@@ -97,6 +98,7 @@ func (w *Worker) resolveBatch(ctx context.Context, batch []app.PendingReference)
 // outcome. It returns false when the resolution failed: the operation stays
 // due and comes back in the next cycle (spec M6, decision 9).
 func (w *Worker) resolve(ctx context.Context, ref app.PendingReference) bool {
+	faultinject.Point("references.after_claim") // crash with the operation claimed (test-plan §4)
 	itemCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), itemTimeout)
 	defer cancel()
 	res, err := w.resolver.Resolve(itemCtx, ref)

@@ -12,6 +12,7 @@ import (
 	"github.com/KaioVinicios/pda/internal/app"
 	"github.com/KaioVinicios/pda/internal/apperrors"
 	"github.com/KaioVinicios/pda/internal/config"
+	"github.com/KaioVinicios/pda/internal/faultinject"
 )
 
 // rollbackTimeout bounds the rollback, which runs even when the caller's
@@ -47,7 +48,7 @@ func (u *UnitOfWork) Snapshot(ctx context.Context, fn func(app.Repos) error) err
 	return u.run(ctx, snapshotTx, false, fn)
 }
 
-func (u *UnitOfWork) run(ctx context.Context, opts pgx.TxOptions, setLockTimeout bool, fn func(app.Repos) error) error {
+func (u *UnitOfWork) run(ctx context.Context, opts pgx.TxOptions, write bool, fn func(app.Repos) error) error {
 	tx, err := u.pool.BeginTx(ctx, opts)
 	if err != nil {
 		return interrupted(ctx, translate(err))
@@ -58,7 +59,7 @@ func (u *UnitOfWork) run(ctx context.Context, opts pgx.TxOptions, setLockTimeout
 			panic(p)
 		}
 	}()
-	if setLockTimeout {
+	if write {
 		if _, err := tx.Exec(ctx, `SELECT set_config('lock_timeout', $1, true)`, u.lockTimeout); err != nil {
 			rollback(ctx, tx)
 			return interrupted(ctx, translate(err))
@@ -67,6 +68,11 @@ func (u *UnitOfWork) run(ctx context.Context, opts pgx.TxOptions, setLockTimeout
 	if err := fn(repos{q: tx}); err != nil {
 		rollback(ctx, tx)
 		return interrupted(ctx, err)
+	}
+	if write {
+		// Every write passes here; the crash scenario runs only the consumer on
+		// the armed instance (test-plan §4, spec M8 decisions 4 and 5).
+		faultinject.Point("consumer.before_commit")
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return interrupted(ctx, translate(err))

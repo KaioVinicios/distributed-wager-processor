@@ -16,6 +16,7 @@ import (
 
 	"github.com/KaioVinicios/pda/internal/adapters/awsclient"
 	"github.com/KaioVinicios/pda/internal/app"
+	"github.com/KaioVinicios/pda/internal/faultinject"
 )
 
 // Processor concludes one message: app.ConsumeWager.
@@ -288,7 +289,7 @@ func (c *Consumer) apply(work context.Context, msg types.Message, a action, caus
 	defer cancel()
 	switch a.kind {
 	case actDelete:
-		// Fault point consumer.after_commit_before_delete (M8).
+		faultinject.Point("consumer.after_commit_before_delete") // crash between the commit and the delete (test-plan §4)
 		c.delete(ctx, msg, log)
 	case actDLQ:
 		if _, err := c.api.SendMessage(ctx, dlqInput(c.queues.DLQURL, msg, a, time.Now())); err != nil {

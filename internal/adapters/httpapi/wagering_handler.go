@@ -6,6 +6,7 @@ import (
 	"github.com/KaioVinicios/pda/internal/app"
 	"github.com/KaioVinicios/pda/internal/auth"
 	"github.com/KaioVinicios/pda/internal/domain/wagering"
+	"github.com/KaioVinicios/pda/internal/faultinject"
 )
 
 // submitWager is POST /wagering/transactions (lifecycle §6.1): decode (400) →
@@ -58,6 +59,7 @@ func (h handlers) submitWager(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, h.log, err)
 		return
 	}
+	faultinject.Point("http.after_commit_before_response") // the client gets no answer (test-plan §4)
 	writeJSON(w, resultStatus(res.Tx.Status()), resultResponse(res.Tx, res.Replay))
 }
 
