@@ -96,6 +96,7 @@ O isolamento é por banco porque o ledger é append-only e bloqueia `TRUNCATE`. 
 | `REFERENCE_TTL` | 10 min | 3 s | 5 s |
 | `SHUTDOWN_TIMEOUT` | 20 s | 5 s | 5 s |
 | `DB_LOCK_TIMEOUT` | 5 s | 2 s | 2 s |
+| `HTTP_REQUEST_TIMEOUT` (M9) | 10 s | 10 s | 5 s |
 
 ### 3.4 Cluster e2e (`testkit.Cluster`)
 
@@ -105,7 +106,8 @@ O isolamento é por banco porque o ledger é append-only e bloqueia `TRUNCATE`. 
 - Toda instância mantém o HTTP ligado, porque a prontidão é sempre `/health/ready` (com `HTTP_ENABLED=false` não há rotas de health, D-15). O bisturi dos cenários de crash é o papel do componente em teste.
 - **Operações:**
   - `Kill(i)` envia `SIGKILL`, um encerramento abrupto;
-  - `Stop(i)` envia `SIGTERM` e espera a saída;
+  - `Stop(i)` envia `SIGTERM` e espera a saída; `StopAsync(i)` (M9) envia o `SIGTERM` e devolve na hora um canal com o resultado, para o teste agir enquanto a instância para;
+  - `Instance(i).ReadyStatus` (M9) devolve o status do `/health/ready` da instância (0 sem processo);
   - `Restart(i, env…)` reinicia o processo com outro ambiente, por exemplo com ou sem ponto de falha, ou com um papel desligado;
   - `Instance(i).Client()` devolve um cliente HTTP apontado para aquela instância, e `Instance(i).WaitExit`/`AssertFaultHit` cobram o encerramento;
   - o cliente do cluster distribui as requisições em round-robin **só entre as instâncias vivas e sem ponto de falha armado**: um alvo morto responderia `connection refused`, e um alvo armado morreria no item errado.
@@ -115,7 +117,10 @@ O isolamento é por banco porque o ledger é append-only e bloqueia `TRUNCATE`. 
 - `Restore` devolve o cluster ao estado base: reinicia só as instâncias que saíram ou rodam com override, registra no log do teste as execuções substituídas se ele falhou, e termina com `AssertAllReady`. Os testes de crash o chamam num `defer`.
 - **Data race nos processos filhos reprova o pacote:** o detector do binário do teste não enxerga os filhos. O `Close` do cluster recusa código de saída diferente de 0 num stop gracioso (o detector sai com 66) e qualquer `WARNING: DATA RACE` no log de qualquer execução de qualquer instância.
 - O ambiente de cada processo é montado do zero, sem herdar o do teste (um `AWS_PROFILE` do desenvolvedor impediria a instância de subir).
-- Para simular indisponibilidade, o harness executa `docker compose pause|unpause postgres|ministack` (M9, testes R).
+- Para simular indisponibilidade, o harness executa `docker compose pause|unpause postgres|ministack` (M9, testes R, `testkit.Pause`).
+  - Os testes que pausam não usam `t.Parallel()`: um serviço pausado derruba qualquer teste simultâneo.
+  - O `unpause` fica registrado no `Cleanup` e é idempotente. Como um `panic` por timeout do `go test` pula os `Cleanup`, o `make infra-up` também faz `unpause` antes do `up`.
+  - Não rode `make test-integration` ao mesmo tempo que `make test-e2e`.
 
 ---
 
@@ -189,6 +194,7 @@ Um ponto dispara **sempre na primeira passagem**, sem contador nem filtro por op
 | U27 | M8, `faultinject`: `TestParse` e `TestTrigger` (a lógica que o build com a tag liga a `PDA_FAULT`, stderr e `os.Exit`: `FAULT_HIT <ponto>` e 137 só no ponto habilitado) e `TestPointIsNoOpWithoutTag` (sem a tag, um ponto habilitado não faz nada) | D-19, §4 |
 | U28 | M8, `testkit`: `TestEnvOf` (o ambiente escrito para os processos do cluster, lido pela mesma biblioteca do binário, devolve a `Config` e os `Roles`) | spec M8, decisão 6 |
 | U29 | M8, `testkit`: `TestHarnessPick` (round-robin só entre instâncias vivas e desarmadas) e `TestClientTryReportsTransportError` | TST-C04 |
+| U30 | M9: `TestEdgeRequestDeadline` (`httpapi`: uma rota autenticada com o caso de uso preso responde 503 `TEMPORARILY_UNAVAILABLE` com `Retry-After: 1` depois de `HTTP_REQUEST_TIMEOUT`; o `/health/ready` não recebe o prazo) e os casos `request timeout at lock timeout`/`at write timeout` de `TestValidate_RejectsInvalidValues` (`config`) | D-04, HTTP-09, FX-02 |
 
 ### 5.2 Integração (TST-I)
 
@@ -263,7 +269,7 @@ Um ponto dispara **sempre na primeira passagem**, sem contador nem filtro por op
 
 Todos rodam sobre o cluster de 3 processos do `TestMain` (`env.StartCluster(ctx, 3)`), distribuindo as requisições entre as instâncias em round-robin, a menos que o teste indique outra coisa. O C01a e o C02 também rodam **em processo** desde o M3 (`test/integration/`), como verificação antecipada do E4 e do E5 pelo HTTP. Os arquivos de cada teste estão em [`structure.md`](structure.md) §1.
 
-**O harness em si** (M8): `TestClusterSpreadsRequests` (6 leituras dão 2 a cada instância, lidas da `/metrics` de cada uma) e `TestClusterInstanceLifecycle` (instância morta ou armada fora do round-robin, parada limpa com código 0, reinício na mesma porta sem conexão velha, e o ambiente do desenvolvedor sem chegar aos processos). O `TestMain` reprova o pacote se qualquer processo registrar data race (C12).
+**O harness em si** (M8, M9): `TestClusterStopAsync` (M9: o `StopAsync` devolve antes da saída e reporta a parada limpa; o `ReadyStatus` acompanha a instância), `TestClusterSpreadsRequests` (6 leituras dão 2 a cada instância, lidas da `/metrics` de cada uma) e `TestClusterInstanceLifecycle` (instância morta ou armada fora do round-robin, parada limpa com código 0, reinício na mesma porta sem conexão velha, e o ambiente do desenvolvedor sem chegar aos processos). O `TestMain` reprova o pacote se qualquer processo registrar data race (C12).
 
 **C10b, "ao mesmo tempo" de verdade** (achado da execução do M8): uma barreira no envio não basta, porque o SQS entrega bem depois de o HTTP responder. O teste trava a linha da carteira, envia a mensagem, espera o consumidor bloquear no lock, envia o HTTP, espera-o bloquear também e solta o lock (`raceBehindLock`). Como conta as esperas por lock do banco, o C10b roda sem `t.Parallel()`.
 
@@ -294,10 +300,10 @@ Todos rodam sobre o cluster de 3 processos do `TestMain` (`env.StartCluster(ctx,
 
 | ID | Teste | Procedimento | Asserções | Cobre |
 | --- | --- | --- | --- | --- |
-| R01 | `TestPostgresOutage` | Tráfego HTTP e SQS contínuo; `docker compose pause postgres` por 10 s; `unpause` | Durante a queda: HTTP responde 503 com `Retry-After` e `/health/ready` responde 503. Depois: todas as mensagens SQS são processadas, **nenhuma vai para a DLQ** (pausa por saúde), sem duplicidade, tudo consistente | §3, SQS-07, E5 |
-| R02 | `TestSQSOutage` | `docker compose pause ministack` por 10 s | Durante a queda: `/health/ready` responde 503 (SQS indisponível), mas o HTTP continua processando; a outbox acumula e `outbox_oldest_pending_age_seconds` sobe. Depois: a outbox esvazia e todos os eventos chegam à auditoria | §3, OUT-04 |
-| R03 | `TestGracefulShutdownSQS` | 30 mensagens em andamento; `SIGTERM` na instância 1 | A instância sai dentro de `SHUTDOWN_TIMEOUT`, com logs de parada ordenada; nenhuma mensagem é perdida (todas processadas uma vez, pela 1 ou por outra instância) | SQS-09, FX-04 |
-| R04 | `TestGracefulShutdownHTTP` | Requisições em andamento; `SIGTERM` | As requisições em andamento terminam, as novas são recusadas (conexão recusada) e o processo termina com código 0 | FX-04 |
+| R01 | `TestPostgresOutage` | Tráfego HTTP (3 instâncias) e SQS contínuo, com o consumidor só na instância 0; `docker compose pause postgres` por 15 s; `unpause`. Os 503 são reenviados com a mesma chave depois da queda | Durante a queda: as respostas HTTP são 503 com `Retry-After` (pelo prazo `HTTP_REQUEST_TIMEOUT`), `/health/ready` responde 503 nas 3 instâncias e, depois de pausar, o consumidor não recebe mais mensagens (`sqs_messages_received_total` estável). Depois: todas as mensagens SQS são processadas uma vez, **nenhuma vai para a DLQ** (pausa por saúde), toda operação HTTP fica gravada uma vez, tudo consistente | §3, SQS-07, E5 |
+| R02 | `TestSQSOutage` | `docker compose pause ministack` por 10 s, com BETs pelo HTTP durante a queda | Durante a queda: `/health/ready` responde 503 (SQS indisponível), mas o HTTP continua processando; a outbox acumula (`outbox_pending_events` > 0, e o evento pendente mais antigo envelhece, conferido por SQL). Depois: a outbox esvazia e todos os eventos chegam à auditoria | §3, OUT-04 |
+| R03 | `TestGracefulShutdownSQS` | Consumidor só na instância 0; 30 mensagens em 3 carteiras travadas pelo teste, enviadas intercaladas por carteira (enviadas em bloco, o primeiro lote só teria o grupo da primeira); `SIGTERM` com uma mensagem por carteira parada no lock, que é solto depois de `sqs consumer stopping`; o consumidor é religado na instância 1 | A instância sai com código 0 dentro de `SHUTDOWN_TIMEOUT`, com logs de parada ordenada (HTTP → consumidor → pool); as 3 mensagens em andamento terminam na instância 0 e nenhuma outra começa; nenhuma mensagem é perdida (todas processadas uma vez) | SQS-09, FX-04 |
+| R04 | `TestGracefulShutdownHTTP` | 5 requisições à instância 0 paradas no lock da carteira; `SIGTERM`; uma requisição nova depois de `http server stopping`; o lock é solto | As requisições em andamento terminam com 200, a nova é recusada (conexão recusada, sem registro) e o processo termina com código 0 | FX-04 |
 
 ---
 

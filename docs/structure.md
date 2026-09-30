@@ -227,7 +227,8 @@ pda/
 │   │   ├── sqs.go                          # envelope WagerTransactionRequested, envio, leitura da DLQ, profundidade e fila drenada (M5)
 │   │   ├── iam.go                          # políticas de deploy/aws/policies renderizadas e usuários IAM do teste (I04f, M5)
 │   │   ├── assert.go                       # AssertWalletConsistent (test-plan §6, itens 1–8), OutboxProblems, OutboxPayloads, SnapshotCounts, Eventually
-│   │   └── cluster.go                      # N processos do binário: build, start, Kill/Stop/Restart, Instance, logs e código de saída (e2e, M8)
+│   │   ├── cluster.go                      # N processos do binário: build, start, Kill/Stop/StopAsync/Restart, Instance (ReadyStatus), logs e código de saída (e2e, M8/M9)
+│   │   └── compose.go                      # Pause: docker compose pause|unpause de um serviço, com unpause no Cleanup (testes R, M9)
 │   ├── integration/                        # //go:build integration — cenários entre componentes
 │   ├── e2e/                                # //go:build e2e — multi-instância, falhas, resiliência
 │   │   ├── main_test.go                    # TestMain: banco isolado + cluster de 3 processos, parado antes da limpeza do banco
@@ -239,6 +240,7 @@ pda/
 │   │   ├── references_test.go              # C07a, C07b
 │   │   ├── restart_test.go                 # C08a, C08b
 │   │   ├── channels_test.go                # C10a, C10b
+│   │   ├── resilience_test.go              # R01–R04: quedas do PostgreSQL e do MiniStack, shutdown com SQS e HTTP em andamento (M9)
 │   │   └── helpers_test.go                 # corpo das operações e submissão
 │   └── load/ ⭐                            # teste de carga (test-plan §9)
 │

@@ -189,6 +189,10 @@ Quando uma mensagem termina em erro transitório, o consumidor faz um `Ping` no 
 
 Isso evita que uma indisponibilidade temporária mande mensagens válidas para a DLQ (§3 do desafio). `/health/ready` reflete o mesmo estado.
 
+**A pausa é por instância** (achado da spec do M9). Cada instância só fecha a sua depois de sofrer o próprio erro transitório. Numa queda geral, a mensagem que a instância A recebeu e devolveu com backoff pode ser recebida pela B, que ainda não pausou, e depois pela C. No pior caso, cada instância consumidora gasta um recebimento da mensagem antes de todas pausarem.
+- **Regra:** o `maxReceiveCount` precisa superar com folga o número de instâncias consumidoras. No compose, são 10 contra 3 réplicas.
+- **Testes:** usam `maxReceiveCount = 3` para a redrive ser rápida. Por isso o R01 liga o consumidor numa só instância.
+
 Uma falha do SQS (`ReceiveMessage` com erro) faz o poller tentar de novo com backoff de 1 s a 30 s, com log e métrica `sqs_receive_errors_total`.
 
 ### 4.4 DLQ

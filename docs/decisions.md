@@ -131,6 +131,12 @@ As versões fixadas, as imagens, as ferramentas de lint e formatação e a confo
 - **Dois 500 distinguíveis pelo `Content-Type`:** `application/json` com `status: FAILED` é a falha permanente **registrada**; `application/problem+json` com `INTERNAL_ERROR` é um erro interno sem registro (`panic`, ou uma linha já gravada que não pode ser lida), e reenviar com a mesma chave é seguro.
 - **Rotas:** caminho inexistente → 404 `ROUTE_NOT_FOUND`; método errado → 405 `METHOD_NOT_ALLOWED` com `Allow`. Os dois em `problem+json`, sem exigir token.
 - **503:** sempre com `Retry-After: 1`.
+- **Prazo por requisição** (spec do M9, 30/09/2026): toda rota autenticada roda com o prazo `HTTP_REQUEST_TIMEOUT`, com padrão de 10 s, simétrico ao `SQS_PROCESSING_TIMEOUT`. O middleware fica por fora da autenticação.
+  - Motivo: com o PostgreSQL congelado, o kernel mantém as conexões abertas e uma query espera indefinidamente. O `lock_timeout` roda no servidor, e o `WriteTimeout` não cancela o contexto da requisição.
+  - Efeito: o prazo vencido é `context.DeadlineExceeded`, transitório pela D-05, então a resposta é 503 com `Retry-After`.
+  - Validação: `DB_LOCK_TIMEOUT < HTTP_REQUEST_TIMEOUT < 30 s` (o `WriteTimeout`). Assim o lock timeout continua vencendo antes e sendo contado como tal.
+  - Um commit em voo quando o prazo vence tem resultado desconhecido (D-14), e o reenvio com a mesma chave cai no replay.
+  - As rotas públicas ficam sem o prazo: o health tem 2 s por dependência, e o docs é estático.
 - **Representações:** `Wallet` inclui `createdAt` e `updatedAt`; o `201` do `POST /wallets` traz `Location`. A representação de transação não expõe a `idempotencyKey`.
 
 ---
@@ -352,6 +358,7 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
 | Prazo × visibility (M5) | `SQS_PROCESSING_TIMEOUT < SQS_VISIBILITY_TIMEOUT`, validado no start. Antes de cada mensagem, se o visibility restante é menor que o prazo, ela e as seguintes do grupo são liberadas sem processar (`ChangeMessageVisibility(0)`) |
 | Erro permanente sem `FAILED` (M5) | A linha já gravada com a mesma chave não pode ser lida: DLQ com `errorCode = INTERNAL_ERROR`, sem inbox (o 500 `INTERNAL_ERROR` do HTTP) |
 | Falha do `DeleteMessage` após o commit (M5) | Log e `sqs_delete_errors_total`; a reentrega cai na inbox como duplicata |
+| Pausa por instância (achado da spec do M9) | Cada instância fecha a sua pausa só depois de sofrer o próprio erro transitório. Numa queda geral, a mesma mensagem pode ser recebida uma vez por instância antes de todas pausarem. Por isso o `maxReceiveCount` precisa superar com folga o número de instâncias consumidoras: 10 contra 3 réplicas no compose. Os testes usam 3, e o R01 liga o consumidor numa só instância (messaging §4.3) |
 | Long polling no shutdown (M5, achado da validação) | O poll cancelado pelo cliente continua aberto no broker até o fim do seu wait e pode esconder, por um visibility timeout, uma mensagem liberada nesse intervalo. Sem perda nem duplicidade (messaging §4.5). O `testkit.Audit.Absent` deixou de cancelar receives no meio pelo mesmo motivo |
 
 ---
@@ -483,6 +490,10 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
   - o cluster reprova o pacote se qualquer processo registrar `WARNING: DATA RACE` ou sair de um stop gracioso com código diferente de 0: o detector de corrida do binário de teste não enxerga os processos filhos (TST-C12);
   - o ambiente dos processos do cluster é montado do zero a partir da `config.Config` (`testkit.EnvOf`), sem herdar o do teste;
   - "HTTP e SQS ao mesmo tempo" (C10b) é garantido por uma barreira **no banco**, com os dois canais parados no lock da carteira e soltos juntos: uma barreira no envio não faz os canais se encontrarem, porque o SQS entrega depois de o HTTP responder (achado da execução).
+- **Delta do M9** (spec [`dev/specs/2026-09-30-m9-resilience-design.md`](dev/specs/2026-09-30-m9-resilience-design.md)):
+  - os testes R ficam em `test/e2e/resilience_test.go`, sem `t.Parallel()`, e simulam a queda com `docker compose pause|unpause` (`testkit.Pause`). O `unpause` fica registrado no `Cleanup`, e o `make infra-up` também faz `unpause`, para que um `panic` por timeout não deixe o PostgreSQL congelado;
+  - o R01 liga o consumidor só na instância 0 e derruba o PostgreSQL por 15 s. Assim "a pausa segura as mensagens" é uma asserção precisa, sem o encadeamento entre instâncias da D-12;
+  - o R03 e o R04 tornam o trabalho em andamento determinístico com uma barreira no banco: carteiras travadas, `SIGTERM` com o trabalho parado no lock, lock solto depois da linha de parada no log (`Cluster.StopAsync`).
 - **Duplicidade no SQS:** os testes enviam reentregas com `MessageDeduplicationId` diferentes, ou após a janela de deduplicação. Assim a deduplicação exercitada é a da aplicação (inbox e idempotência), e não a do FIFO (TST-C11).
 - **Invariante final em todos os cenários:** `stored == Σ créditos − Σ débitos` (TST-C09).
 

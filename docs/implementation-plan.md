@@ -189,9 +189,20 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 
 ### Dia 3 — 01/10 (qui): resiliência, documentação e entrega
 
-#### M9 — Resiliência (~1,5 h)
+#### M9 — Resiliência (~1,5 h) — ✅ concluído em 30/09
 
 Testes R01–R04: queda do PostgreSQL, queda do SQS e shutdown gracioso com HTTP e SQS.
+
+- **Entregue também:**
+  - **o prazo por requisição HTTP** (`HTTP_REQUEST_TIMEOUT`, 10 s; 5 s no e2e), com o middleware `withDeadline` nas rotas autenticadas. Com o PostgreSQL congelado, as conexões TCP ficam abertas e o HTTP esperaria o banco em vez de responder 503 (D-04). O R01 foi escrito antes e falhou exatamente por isso;
+  - o `testkit.Pause` (`docker compose pause|unpause`, com `unpause` no `Cleanup`), o `unpause` por serviço no `make infra-up`, o `Cluster.StopAsync`, o `Instance.ReadyStatus` e o `Harness.CloseIdleConnections`.
+- **Achados da spec:** a pausa por saúde é **por instância**, então numa queda geral cada instância consumidora pode gastar um recebimento da mensagem antes de pausar. O `maxReceiveCount` precisa superar com folga o número de instâncias (D-12), e o R01 liga o consumidor numa só.
+- **Achados da execução:**
+  - com o broker congelado, um `Publish` que venceu o prazo no cliente é entregue depois do `unpause`. Por isso, no R02, a sabotagem "o caminho de falha confirma o evento" não é detectável; a do backoff sem teto é;
+  - o Docker marca um container pausado como *unhealthy*, e o `up --wait` desiste nele. Além disso, `compose unpause a b` falha por inteiro se um dos dois não está pausado;
+  - no R03, 30 mensagens enviadas em bloco por carteira deixavam o primeiro lote com um só grupo, e o MiniStack não entregou os outros grupos ao segundo poller. O envio passou a ser intercalado.
+
+**Cobre:** FX-04, F6, SQS-07 e SQS-09 com 3 processos, OUT-04 e HTTP-08 com a queda real. Spec: [`dev/specs/2026-09-30-m9-resilience-design.md`](dev/specs/2026-09-30-m9-resilience-design.md) · plano: [`dev/plans/2026-09-30-m9-resilience.md`](dev/plans/2026-09-30-m9-resilience.md).
 
 #### M10 — Documentação de entrega (~2,5 h)
 
@@ -199,6 +210,9 @@ Testes R01–R04: queda do PostgreSQL, queda do SQS e shutdown gracioso com HTTP
 - `ARCHITECTURE.md` (DOC-02, DOC-03): **já existe desde 28/09 como documento vivo**, mantido a cada marco. No M10 resta fechar as §16 (limitações) e §17 (trabalho não concluído) e fazer uma revisão final contra a implementação.
 - `docs/testing.md` (DOC-04): preparação de dependências, integração, multi-instância e simulações de falha, incluindo as build tags.
 - Atualização final do checklist de `delivery-requirements.md`.
+- **Pendências do M9:**
+  - o README lista `HTTP_REQUEST_TIMEOUT` (padrão 10 s; `DB_LOCK_TIMEOUT < HTTP_REQUEST_TIMEOUT < 30 s`) entre as variáveis;
+  - o `docs/testing.md` avisa que `make test-integration` e `make test-e2e` não rodam ao mesmo tempo, porque os testes R pausam o PostgreSQL e o MiniStack compartilhados, e explica o `unpause` do `make infra-up` depois de uma execução interrompida (test-plan §3.4).
 
 #### M11 — Verificação a partir de um clone limpo (~1 h)
 
@@ -255,6 +269,8 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | Deadlock entre o worker e o HTTP por ordem de lock invertida | `40P01` ou lock timeout | ✅ Tratado no M6: carteira → transação, provado por `TestResolveReferencesLockOrder` |
 | ~~`TestMigrationsUpDownUp` falha de forma intermitente~~ | `permission denied to terminate process (42501)` ao derrubar o banco de teste | ✅ Tratado em 30/09: o `DROP … WITH (FORCE)` checa a permissão de encerrar **todo** processo ligado ao banco, e `pda_owner` não tem `pg_signal_backend`; um worker de autovacuum ou um backend `pda_app` ainda saindo fazia o `DROP` falhar, e fora do teste de migrations a falha era silenciosa (bancos órfãos). O `testkit` passou a usar `DROP` sem `FORCE` e o `cleanup` devolve o erro (I28–I30; [spec](dev/specs/2026-09-30-test-db-drop-design.md)) |
 | ~~`TestDomainFlowsPersist` (I17) intermitente~~ | `refund-2 was not advanced` sob carga (1 em 4 execuções completas da integração, na verificação do M8) | ✅ Tratado em 30/09: a asserção comparava a antecipação com o horário agendado originalmente, uma corrida contra o relógio; passou a exigir o instante de conclusão do `bet-3`, que é o que o `AdvanceDependents` grava ([spec](dev/specs/2026-09-30-i17-anticipation-flake-design.md)) |
+| ~~HTTP pendurado com o banco congelado~~ | Requisição sem resposta durante uma queda do PostgreSQL | ✅ Tratado no M9: `HTTP_REQUEST_TIMEOUT` responde 503 com `Retry-After` (R01, `TestEdgeRequestDeadline`) |
+| Queda geral do banco gastando recebimentos em várias instâncias | Mensagem válida na DLQ depois da volta do banco | Aceito e documentado no M9: a pausa é por instância, e o `maxReceiveCount` (10) supera com folga as 3 réplicas (messaging §4.3) |
 | Estouro de prazo | Checkpoint do dia não atingido | Ordem de corte (§4), sempre preservando os eliminatórios |
 
 ---

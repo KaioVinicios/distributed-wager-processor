@@ -176,9 +176,25 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
 - **I17 intermitente (fora do M8, corrigido em seguida):** o `TestDomainFlowsPersist` falhou 1 vez na verificação. A asserção da antecipação comparava o `next_attempt_at` com o horário agendado originalmente e perdia a corrida contra o relógio sob carga; reproduzido 3 de 3 com um atraso de 200 ms. Passou a exigir o instante de conclusão do `bet-3` ([spec](specs/2026-09-30-i17-anticipation-flake-design.md) → [plano](plans/2026-09-30-i17-anticipation-flake.md)).
 - **Prova:** cada teste C visto falhando pelo motivo certo (os 6 pontos de falha) ou pela sabotagem registrada no `// Sensitivity:`; 4 sabotagens do harness detectadas, inclusive uma data race num processo filho.
 
+## 30/09/2026 (qua): M9, resiliência
+
+- [Spec](specs/2026-09-30-m9-resilience-design.md) → [plano](plans/2026-09-30-m9-resilience.md) → execução inline com TDD.
+- **Escolha do autor na spec:** um prazo por requisição HTTP (`HTTP_REQUEST_TIMEOUT`), em vez de mudar o R01. Com o PostgreSQL congelado, o kernel mantém as conexões abertas, e o HTTP esperaria o banco em vez de responder 503.
+- **Entregue:**
+  - `testkit.Pause`, `Cluster.StopAsync`, `Instance.ReadyStatus`, `Harness.CloseIdleConnections` e o `unpause` no `make infra-up`;
+  - `HTTP_REQUEST_TIMEOUT` com o middleware `withDeadline` (U30);
+  - `test/e2e/resilience_test.go` com os R01–R04 e o `TestClusterStopAsync`.
+- **Prova do achado:** o R01, escrito antes da mudança de produto, falhou exatamente com "no HTTP answer arrived during the outage: the requests waited for the database". Com o prazo no lugar, passou.
+- **Achados da execução:**
+  - a sabotagem planejada do R02 ("o caminho de falha confirma o evento") **não é detectável**: com o broker congelado, o `Publish` que venceu o prazo é entregue depois do `unpause`. A execução viu 12 falhas reais e todos os eventos na auditoria. A sabotagem virou "backoff sem teto";
+  - o Docker marca o container pausado como *unhealthy*, e o `compose unpause a b` falha por inteiro. O `infra-up` passou a fazer `unpause` por serviço e a esperar 3 s;
+  - no R03, o envio em bloco por carteira deixava um só grupo no primeiro lote. O envio passou a ser intercalado;
+  - o `contextcheck` recusou helpers com `t` dentro do `Eventually` (virou um `within` local), e o gerador de tráfego do R01 continuava chamando `t` depois de um teste que falhou (virou um `defer`).
+- **Sensibilidade:** 8 sabotagens detectadas nos 4 testes R (R01: 3, R02: 2, R03: 2, R04: 1) e 1 não detectável por construção (registrada no teste e no `ARCHITECTURE.md` §16).
+
 ## Onde paramos
 
-- **M8 concluído (commits aguardando autorização).** Todos os eliminatórios estão cobertos. Próximo passo: **M9, resiliência (R01–R04)**, começando pela spec; o helper `docker compose pause|unpause` entra lá.
+- **M9 concluído (commits aguardando autorização).** Todos os testes do plano estão implementados. Próximo passo: **M10, documentação de entrega** (README, `docs/testing.md`, que deve citar o cuidado do `pause` do test-plan §3.4, e o fecho do `ARCHITECTURE.md`).
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - decidir se os 3 minors do M0 entram em algum marco;
