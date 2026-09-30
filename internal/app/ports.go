@@ -104,6 +104,42 @@ type OutboxRepository interface {
 	Insert(ctx context.Context, envs ...events.Envelope) error
 }
 
+// OutboxStore is the publisher's side of outbox_events (D-13). Every method is
+// one statement on the pool, outside any unit of work; owner is the instance
+// identity written to locked_by. Instants come from the database clock.
+type OutboxStore interface {
+	// Claim leases up to limit due events (unpublished, next_attempt_at <= now,
+	// no live lease) with FOR UPDATE SKIP LOCKED.
+	Claim(ctx context.Context, owner string, lease time.Duration, limit int) ([]PendingEvent, error)
+	// MarkPublished confirms an event still leased by owner; ok is false when
+	// the lease was lost (another instance confirmed or reclaimed it).
+	MarkPublished(ctx context.Context, eventID, owner string) (publishedAt time.Time, ok bool, err error)
+	// MarkFailed counts the attempt, schedules the next one retryIn from now
+	// and releases the lease; ok is false when the lease was lost.
+	MarkFailed(ctx context.Context, eventID, owner string, retryIn time.Duration, reason string) (ok bool, err error)
+	// Backlog counts the unpublished events and the age of the oldest.
+	Backlog(ctx context.Context) (OutboxBacklog, error)
+}
+
+// PendingEvent is a leased outbox row, ready to publish as is.
+type PendingEvent struct {
+	EventID        string
+	MessageGroupID string
+	EventType      string
+	EventVersion   int
+	CorrelationID  string
+	Payload        []byte // the envelope JSON read from the column
+	OccurredAt     time.Time
+	Attempts       int
+	Reclaimed      bool // the previous owner's lease had expired
+}
+
+// OutboxBacklog feeds the outbox lag gauges.
+type OutboxBacklog struct {
+	Pending   int
+	OldestAge time.Duration // 0 when nothing is pending
+}
+
 // InboxRepository deduplicates SQS messages per consumer (SQS-03).
 type InboxRepository interface {
 	// Find returns nil, nil when the message was never recorded.
