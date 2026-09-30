@@ -9,6 +9,9 @@ x-env-files: &env-files
 x-app: &app
   build: .
   image: pda:local
+  # A replica that dies (exit != 0: a server that stopped, a panic, an OOM kill)
+  # comes back; a clean stop (0) and docker compose stop/kill do not restart it.
+  restart: on-failure
   env_file:
     - path: .env.example
     - path: .env
