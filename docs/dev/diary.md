@@ -205,9 +205,22 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
   - no compose, `kill -QUIT 1` na `app-1` (o runtime do Go sai com 2) e a réplica volta sozinha, *healthy*, com `RestartCount` = 1; um `docker compose kill` não a reinicia.
 - **Ajuste da execução:** o `docker compose config` também renderiza a extensão `x-app`, então a contagem de `on-failure` dá 4. A conferência por serviço mostra só as 3 réplicas.
 
+## 30/09/2026 (qua): M10, documentação de entrega
+
+- Roteiro no chat, aprovado pelo autor (M10 é documentação: sem spec nem TDD, [`development-workflow.md`](../development-workflow.md) §2).
+- **Entregue:**
+  - `README.md`: pré-requisitos, início rápido, serviços e portas, todas as variáveis, filas e credenciais do broker, migrations, identidades de teste, exemplos e testes com tempos, operação e problemas comuns, e o mapa dos entregáveis;
+  - `docs/testing.md`;
+  - o fecho do `ARCHITECTURE.md` (§16–§18 e a revisão contra o código) e do checklist.
+- **Prova:**
+  - cada exemplo do README rodou contra o compose: abertura, BET, replay em outra réplica, 422, 409, REFUND antes da BET (202 → resolvido pelo worker), ledger paginado, reconciliação consistente, 401/403/404, BET pelo SQS com as credenciais IAM do `provider-a`, `AccessDenied` ao consumir como provedor, eventos na auditoria e métricas;
+  - as simulações de queda do `docs/testing.md` rodaram no compose;
+  - `migrate-down`/`migrate-up`.
+- **Decisão do autor:** o reprocessamento da DLQ não é exigido pelo desafio. Como o MiniStack não implementa `StartMessageMoveTask`, fica documentado, sem script (D-12).
+
 ## Onde paramos
 
-- **M9 concluído (commits aguardando autorização).** Todos os testes do plano estão implementados. Próximo passo: **M10, documentação de entrega** (README, `docs/testing.md`, que deve citar o cuidado do `pause` do test-plan §3.4, e o fecho do `ARCHITECTURE.md`).
+- **M10 concluído (commits aguardando autorização).** Próximo passo: **M11, verificação a partir de um clone limpo** (`git clone` num diretório temporário, `docker compose up --build`, os exemplos do README e os comandos de teste). O que falhar é corrigido ou registrado no `ARCHITECTURE.md` §17.
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - **os 3 minors do M0: resolvidos em 30/09** ([spec](specs/2026-09-30-m0-minors-design.md));

@@ -204,7 +204,7 @@ Testes R01–R04: queda do PostgreSQL, queda do SQS e shutdown gracioso com HTTP
 
 **Cobre:** FX-04, F6, SQS-07 e SQS-09 com 3 processos, OUT-04 e HTTP-08 com a queda real. Spec: [`dev/specs/2026-09-30-m9-resilience-design.md`](dev/specs/2026-09-30-m9-resilience-design.md) · plano: [`dev/plans/2026-09-30-m9-resilience.md`](dev/plans/2026-09-30-m9-resilience.md).
 
-#### M10 — Documentação de entrega (~2,5 h)
+#### M10 — Documentação de entrega (~2,5 h) — ✅ concluído em 30/09
 
 - `README.md` (DOC-01, DOC-05): pré-requisitos, variáveis, filas, migrations up/down, execução, exemplos `curl` com a obtenção do token, e comandos de teste com tempos aproximados.
 - `ARCHITECTURE.md` (DOC-02, DOC-03): **já existe desde 28/09 como documento vivo**, mantido a cada marco. No M10 resta fechar as §16 (limitações) e §17 (trabalho não concluído) e fazer uma revisão final contra a implementação.
@@ -213,6 +213,26 @@ Testes R01–R04: queda do PostgreSQL, queda do SQS e shutdown gracioso com HTTP
 - **Pendências do M9:**
   - o README lista `HTTP_REQUEST_TIMEOUT` (padrão 10 s; `DB_LOCK_TIMEOUT < HTTP_REQUEST_TIMEOUT < 30 s`) entre as variáveis;
   - o `docs/testing.md` avisa que `make test-integration` e `make test-e2e` não rodam ao mesmo tempo, porque os testes R pausam o PostgreSQL e o MiniStack compartilhados, e explica o `unpause` do `make infra-up` depois de uma execução interrompida (test-plan §3.4).
+
+- **Antes do M10:** as 3 pendências menores do M0 foram corrigidas por decisão do autor, com spec, plano e TDD ([spec](dev/specs/2026-09-30-m0-minors-design.md) · [plano](dev/plans/2026-09-30-m0-minors.md)):
+  - um servidor HTTP que para sozinho encerra o processo com código 1;
+  - `restart: on-failure` nas réplicas;
+  - eventos do Fx em DEBUG.
+- **Entregue:**
+  - `README.md` completo;
+  - `docs/testing.md`;
+  - `ARCHITECTURE.md` revisado contra o código, com a nota de topo, a tabela do §13.2, as limitações (18 itens), o trabalho não concluído e o mapa da documentação fechados;
+  - o checklist fechado: só os ⭐ e o ART-11 (M11) continuam abertos.
+- **Verificação dentro do marco:**
+  - todos os exemplos do README executados contra o compose, com uma chamada por réplica;
+  - `make migrate-down N=1` e `make migrate-up` (versão 6 → 5 → 6);
+  - as simulações manuais de queda do PostgreSQL e do MiniStack, e a ordem de parada no log;
+  - tempos medidos: unitários ~13 s, integração ~47 s e e2e ~133 s, com a infraestrutura de pé;
+  - por script, todo teste e toda métrica citados no `ARCHITECTURE.md` existem no código (26 métricas).
+- **Achados:**
+  - o MiniStack 1.5.18 não implementa `StartMessageMoveTask`. O reprocessamento da DLQ passou a ser o reenvio pelo produtor, sem script (D-12, messaging §4.4, limitação 17);
+  - a tabela de métricas do §13.2 estava partida em duas por uma linha em branco;
+  - no `README`, o `unpause` precisa ser um serviço por comando (o achado do M9 também vale para o uso manual).
 
 #### M11 — Verificação a partir de um clone limpo (~1 h)
 

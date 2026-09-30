@@ -49,16 +49,18 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [x] **ART-05** Migrations versionadas, com `up` e `down`. *(M2, 29/09: `TestMigrationsUpDownUp`; serviço `migrate` e `make migrate-up`/`migrate-down`.)*
 - [x] **ART-06** Provisionamento automático das filas `wager-transactions.fifo` e `wager-transactions-dlq.fifo` com redrive, além do destino dos eventos de saída. *(M0, 29/09: `deploy/aws/init.sh`; `TestProvisioning` (redrive `maxReceiveCount=10`, tópico FIFO, assinatura raw).)*
 - [x] **ART-07** Provisionamento automático do IdP (realm, clients, roles/scopes e identidades de teste). *(M0, 29/09: `deploy/keycloak/realm-*.json` importados; tokens reais conferidos com `scripts/get-token.sh`.)*
-- [ ] **ART-08** `README.md` completo (ver DOC-01).
-- [~] **ART-09** `ARCHITECTURE.md` completo (ver DOC-02).
+- [x] **ART-08** `README.md` completo (ver DOC-01). *(M10, 30/09: `README.md`, com os exemplos executados contra o compose; ver DOC-01.)*
+- [x] **ART-09** `ARCHITECTURE.md` completo (ver DOC-02). *(M10, 30/09: revisão final contra o código (testes e métricas citados conferidos) e §16–§18 fechadas; ver DOC-02 e DOC-03.)*
 - [x] **ART-10** `.env.example` com valores locais e nenhum segredo real. *(M0, 29/09: `.env.example` só com valores locais; chaves AWS fora dele (geradas pelo `aws-init`).)*
-- [ ] **ART-11** Os comandos abaixo, ou equivalentes documentados, funcionam a partir de um checkout limpo:
+- [~] **ART-11** Os comandos abaixo, ou equivalentes documentados, funcionam a partir de um checkout limpo:
   ```sh
   docker compose up --build
   go test ./...
   go test -race ./...
   go vet ./...
   ```
+
+  *(M10, 30/09: os 4 comandos passam no repositório (`go test ./...` e `go test -race ./...` com saída 0, `go vet ./...` sem avisos, `docker compose up --build --wait` saudável); a execução a partir de um clone limpo é o M11.)*
 
 ---
 
@@ -90,8 +92,8 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [x] **MON-06** Se formas equivalentes forem aceitas (ex.: `"25"` → `"25.00"`), a normalização anterior ao hash de idempotência está documentada. *(Para `amount`, não se aplica: o formato é estrito e nenhuma forma equivalente é aceita (D-03). A única normalização, UUID em minúsculas, está documentada em D-08.)* *(M1, 29/09: não se aplica ao `amount` (D-03); a normalização de UUID é coberta por `TestPayloadHashHTTPEqualsSQS`.)*
 - [x] **MON-07** Aritmética e comparação exigem moedas compatíveis, com erro tipado quando não forem. *(M1, 29/09: `TestMoneyCurrencyMismatch` (`ErrCurrencyMismatch`).)*
 - [x] **MON-08** Com `int64`, overflow é tratado no parsing, na soma, na subtração e na negação (incluindo `math.MinInt64`). *(M1, 29/09: `TestParseMoney`, `TestMoneyArithmetic` (inclui `Negate(MinInt64)`), `TestSettleEdgeCases`.)*
-- [~] **MON-09** Valores negativos são permitidos em cálculos internos, mas não no saldo da carteira. *(M1, 29/09: domínio: `TestMoneyArithmetic` (negativos internos), `TestWalletDebit` (saldo nunca negativo). Falta o `CHECK` no banco (M2).)*
-- [ ] **MON-10** A persistência preserva exatamente valor e moeda (ex.: `BIGINT` em unidades mínimas + `CHAR(3)`).
+- [x] **MON-09** Valores negativos são permitidos em cálculos internos, mas não no saldo da carteira. *(M1, 29/09: domínio: `TestMoneyArithmetic` (negativos internos), `TestWalletDebit` (saldo nunca negativo). Falta o `CHECK` no banco (M2).)* *(M10, 30/09: o `CHECK (balance_minor >= 0)` desde o M2 (`TestConstraints`), e a concorrência em WAL-04.)*
+- [x] **MON-10** A persistência preserva exatamente valor e moeda (ex.: `BIGINT` em unidades mínimas + `CHAR(3)`). *(M10, 30/09: colunas `*_minor BIGINT` + `currency CHAR(3)` desde o M2; ida e volta idêntica em `TestWalletRepository`, `TestTransactionRepository` e `TestLedgerQueries` (I18).)*
 - [x] **MON-11** Um `Money` não inicializado (zero value do struct) é rejeitado. *(M1, 29/09: `TestMoneyZeroValue`.)*
 - [x] **MON-12** Os cenários podem usar apenas BRL, desde que o tipo carregue a moeda e existam testes de incompatibilidade entre moedas. *(M1, 29/09: `TestMoneyCurrencyMismatch`.)*
 
@@ -104,7 +106,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [x] **DOM-03** Valores de domínio não inicializados ou inválidos são rejeitados. *(M1, 29/09: `TestZeroValuesRejected` (money, wallet, wagering), `TestParseEnums`, `TestParse` (ident).)*
 - [x] **DOM-04** Erros de domínio classificáveis por tipo ou por `errors.Is`/`errors.As`. *(M1, 29/09: erros sentinela e `*ValidationError`/`*ConflictError` verificados com `errors.Is/As`; `TestClassify`.)*
 - [x] **DOM-05** Nenhum `panic` representa rejeição de negócio. *(M1, 29/09: `FuzzParseMoney`; rejeições são estados (`TestKindRules`), nunca `panic`.)*
-- [~] **DOM-06** Toda operação de I/O recebe `context.Context` e respeita cancelamento e timeout. *(M3, 29/09: os casos de uso recebem e respeitam o `ctx`; I16 (M2). Consumidor e workers nos M5–M6.)*
+- [x] **DOM-06** Toda operação de I/O recebe `context.Context` e respeita cancelamento e timeout. *(M3, 29/09: os casos de uso recebem e respeitam o `ctx`; I16 (M2). Consumidor e workers nos M5–M6.)* *(M10, 30/09: I16 `TestContextCancellation`; consumidor, publisher e worker com cancelamento e prazo: `TestConsumerShutdown`, `TestPublisherStop`, `TestWorkerStop`, `TestResolveReferencesFailures` (contexto cancelado); prazo por requisição HTTP: `TestEdgeRequestDeadline`.)*
 - [x] **DOM-07** O domínio não depende de Fx, HTTP, SQS nem de bibliotecas de persistência. *(M1, 29/09: U10 `TestDomainHasNoInfraImports` + `depguard`.)*
   *Evidência:* teste que verifica os imports do pacote de domínio (ex.: `go list -deps`) ou regra de lint.
 
@@ -115,25 +117,25 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [x] **WAL-01** Campos: id, playerId, moeda, saldo, versão, `createdAt` e `updatedAt`. *(M1, 29/09: `TestWalletOpen`.)*
 - [x] **WAL-02** Criação, reidratação e operações de débito/crédito expostas pelo agregado. *(M1, 29/09: `TestWalletDebit`, `TestWalletCredit`, `TestWalletRehydrate`.)*
 - [x] **WAL-03** O par `(playerId, currency)` é único no banco. Uma segunda abertura resulta em conflito. *(M2, 29/09: `TestConstraints` (`wallets_player_currency_uq`), `TestWalletRepository` (`ErrWalletAlreadyExists`, `KindConflict`). O 409 HTTP é do M3.)*
-- [~] **WAL-04** ⛔ Débitos preservam saldo `>= 0`, no domínio e por `CHECK` no banco. *(M1, 29/09: domínio: `TestWalletDebit`, `TestKindRules`. Falta a concorrência (M3/M8).)* *(M2, 29/09: `CHECK`: `TestConstraints` (saldo negativo).)*
+- [x] **WAL-04** ⛔ Débitos preservam saldo `>= 0`, no domínio e por `CHECK` no banco. *(M1, 29/09: domínio: `TestWalletDebit`, `TestKindRules`. Falta a concorrência (M3/M8).)* *(M2, 29/09: `CHECK`: `TestConstraints` (saldo negativo).)* *(M10, 30/09: a concorrência: C02 `TestTwoBetsCompete` com 3 processos e C10b `TestHTTPAndSQSConcurrent` entre canais, sem saldo negativo.)*
 - [x] **WAL-05** A moeda da movimentação coincide com a moeda da carteira. *(M1, 29/09: `TestWalletDebit` (moeda), `TestSettleEvaluationOrder`.)*
 - [x] **WAL-06** Toda mudança de saldo tem o lançamento de ledger correspondente no mesmo commit. *(M2, 29/09: `TestLedgerCoupling`, `TestDomainFlowsPersist`, `TestFinancialAtomicity`.)*
 - [x] **WAL-07** A versão inicial é `1` e só é incrementada quando o saldo muda (`LOSS` não incrementa). *(M1, 29/09: `TestWalletOpen`, `TestWalletDebit`, `TestSettleEdgeCases` (LOSS).)* *(M2, 29/09: trigger `PDA03`: `TestGuardTriggers`.)*
-- [ ] **WAL-08** ⛔ Disputas entre escritores não descartam uma atualização confirmada (sem lost update).
-- [ ] **WAL-09** A estratégia de controle de concorrência está documentada.
+- [x] **WAL-08** ⛔ Disputas entre escritores não descartam uma atualização confirmada (sem lost update). *(M10, 30/09: lock `FOR UPDATE` por carteira + `UPDATE … WHERE version = $old`; C02 `TestTwoBetsCompete` (20 disputas entre processos; sem o `FOR UPDATE`, o teste falha), C03a `TestWalletsInParallel` e C10b `TestHTTPAndSQSConcurrent`, todos com a verificação de consistência do test-plan §6.)*
+- [x] **WAL-09** A estratégia de controle de concorrência está documentada. *(M10, 30/09: `ARCHITECTURE.md` §4 e D-09.)*
 
 ---
 
 ## 6. WagerTransaction (§6.3)
 
-- [~] **TX-01** Tipos `OPENING`, `BET`, `WIN`, `LOSS`, `REFUND` e `ROLLBACK`. `OPENING` recebido por HTTP ou SQS é rejeitado. *(M1, 29/09: `TestNewCommand` (`OPENING_NOT_ALLOWED`), `TestParseEnums`. Faltam as bordas HTTP/SQS (M3/M5).)*
-- [~] **TX-02** Uma transação externa registra: id interno, id externo, provedor, chave de idempotência, hash do payload, carteira, jogador, rodada, jogo, tipo, `Money`, referência externa opcional, estado e timestamps. *(M1, 29/09: `TestNewExternal`, `TestRehydrate`. Falta a persistência (M2).)*
-- [~] **TX-03** Quando aplicável, persiste também: a referência interna resolvida, o `failureCode` e o resultado financeiro devolvido ao provedor (saldo observado). *(M1, 29/09: `TestTransitionResults`, `TestRehydrate`. Falta a persistência (M2).)*
-- [~] **TX-04** Uma transação `OPENING` registra identidade interna estável, carteira, jogador, moeda, valor, estado e timestamps. Os campos externos não se aplicam. *(M1, 29/09: `TestNewOpening`, `TestOpening`. Falta a persistência (M2).)*
+- [x] **TX-01** Tipos `OPENING`, `BET`, `WIN`, `LOSS`, `REFUND` e `ROLLBACK`. `OPENING` recebido por HTTP ou SQS é rejeitado. *(M1, 29/09: `TestNewCommand` (`OPENING_NOT_ALLOWED`), `TestParseEnums`. Faltam as bordas HTTP/SQS (M3/M5).)* *(M10, 30/09: bordas: I12 `TestHTTPErrorContract` (HTTP 400 `OPENING_NOT_ALLOWED`) e I04c `TestInvalidMessagesGoToDLQ` (DLQ com `OPENING_NOT_ALLOWED`).)*
+- [x] **TX-02** Uma transação externa registra: id interno, id externo, provedor, chave de idempotência, hash do payload, carteira, jogador, rodada, jogo, tipo, `Money`, referência externa opcional, estado e timestamps. *(M1, 29/09: `TestNewExternal`, `TestRehydrate`. Falta a persistência (M2).)* *(M10, 30/09: persistência: `TestTransactionRepository` (ida e volta idêntica) e I17 `TestDomainFlowsPersist`.)*
+- [x] **TX-03** Quando aplicável, persiste também: a referência interna resolvida, o `failureCode` e o resultado financeiro devolvido ao provedor (saldo observado). *(M1, 29/09: `TestTransitionResults`, `TestRehydrate`. Falta a persistência (M2).)* *(M10, 30/09: persistência: `TestTransactionRepository`, I17 `TestDomainFlowsPersist` (referência resolvida e `failureCode`) e I10 `TestReplayReturnsOriginalBalance` (saldo observado).)*
+- [x] **TX-04** Uma transação `OPENING` registra identidade interna estável, carteira, jogador, moeda, valor, estado e timestamps. Os campos externos não se aplicam. *(M1, 29/09: `TestNewOpening`, `TestOpening`. Falta a persistência (M2).)* *(M10, 30/09: persistência: I20 `TestOpenWallet` e `TestConstraints` (`wager_tx_internal_fields`).)*
 - [x] **TX-05** O schema distingue origem interna de externa (ex.: coluna `origin` + `CHECK`) e impede um crédito inicial duplicado (índice único parcial). *(M2, 29/09: `TestConstraints` (`wager_tx_origin_kind`, `wager_tx_internal_fields`, `wager_tx_single_opening_uq`).)*
 - [x] **TX-06** Máquina de estados validada pelo domínio: `PENDING`, `PENDING_REFERENCE`, `PROCESSED`, `REJECTED`, `FAILED`. *(M1, 29/09: `TestTransactionStateMachine`.)*
 - [x] **TX-07** Estados terminais (`PROCESSED`, `REJECTED`, `FAILED`) não aceitam novas transições. *(M1, 29/09: `TestTransactionStateMachine` (terminais → `ErrInvalidTransition`).)* *(M2, 29/09: trigger `PDA02`: `TestTerminalTransactionImmutable`, `TestGuardTriggers`.)*
-- [ ] **TX-08** Um replay consulta o resultado persistido sem reaplicar a operação.
+- [x] **TX-08** Um replay consulta o resultado persistido sem reaplicar a operação. *(M10, 30/09: I21 `TestProcessWager`, I10 `TestReplayReturnsOriginalBalance`, C01a `TestSameBet50xHTTP` (49 replays, 1 débito) e C08a `TestFullRestart` (replays depois do reinício).)*
 - [x] **TX-09** ⛔ Todo `PENDING` confirmado tem retomada durável por outra instância. Operações sem dependências podem ser concluídas de forma síncrona, sem commit intermediário de aceite. *(M2, 29/09: `PENDING` não é persistível e `PENDING_REFERENCE` sempre tem agenda: `TestConstraints`; retomada de uma pendência gravada: `TestDomainFlowsPersist`. Falta o worker (M6) e a prova multi-instância (C08).)* *(M6, 30/09: o worker retoma as pendências gravadas, de qualquer instância: `TestResolveReferences`, `TestRecoveryAfterRestart` (I06), `TestPendingExpiresAfterDowntime` (I06b), `TestConcurrentWorkers` (2 workers, cada um com seu pool, em processo). Falta a prova com 3 processos e o crash do worker (C08b, M8).)* *(M8, 30/09: C08b `TestReferenceWorkerCrash`: o worker da instância 0 morre com a pendência reservada (`references.after_claim`) e o da instância 1 a conclui; `reference_expired_total` da instância 1 = 1. C08a `TestFullRestart`: `Kill` nas 3 instâncias e a pendência termina depois do reinício.)*
 - [x] **TX-10** A máquina de estados e a distinção entre falha transitória e permanente estão documentadas. *(M1, 29/09: `transaction-lifecycle.md` §1 e §8; `TestClassify`.)*
 
@@ -176,7 +178,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [x] **IDEM-01** ⛔ A idempotência é persistente e sobrevive ao reinício de todos os processos. *(M3, 29/09: idempotência persistida e usada pelo HTTP (`TestProcessWager`, `TestSameBet50xHTTP`). O reinício de todos os processos é o I06/C08.)* *(M8, 30/09: C08a `TestFullRestart` (as 3 instâncias mortas com `SIGKILL` e reiniciadas: replays HTTP e SQS devolvem os resultados originais, a mensagem reenviada é duplicata na inbox); C05c `TestHTTPCrashAfterCommit` (a instância morre depois do commit e o reenvio em outra devolve o replay).)*
 - [x] **IDEM-02** O header `Idempotency-Key` é obrigatório no HTTP. O servidor não substitui silenciosamente a chave recebida. *(M2, 29/09: unicidade `(provider_id, idempotency_key)`: `TestConstraints`, `TestTransactionQueries`. O header é do M3.)* *(M3, 29/09: I12 (`MISSING_IDEMPOTENCY_KEY`, `INVALID_IDEMPOTENCY_KEY`); `TestSubmitWagerHandler` (chave repetida, a chave recebida vai intacta ao comando).)*
 - [x] **IDEM-03** Hash determinístico dos campos de negócio em JSON canônico com chaves ordenadas. A chave e os metadados de transporte ficam fora do cálculo. Algoritmo, campos e normalizações estão documentados. *(M1, 29/09: `TestPayloadHashGolden` (SHA calculado com `shasum`).)*
-- [~] **IDEM-04** O hash é equivalente entre HTTP e SQS para a mesma operação. *(M1, 29/09: `TestPayloadHashHTTPEqualsSQS` sobre a entrada do domínio. Faltam o DTO e o envelope reais (M3/M5).)* *(M3, 29/09: `TestSubmitWagerHandler` (o hash do DTO HTTP é o do comando do domínio). O envelope SQS é do M5.)*
+- [x] **IDEM-04** O hash é equivalente entre HTTP e SQS para a mesma operação. *(M1, 29/09: `TestPayloadHashHTTPEqualsSQS` sobre a entrada do domínio. Faltam o DTO e o envelope reais (M3/M5).)* *(M3, 29/09: `TestSubmitWagerHandler` (o hash do DTO HTTP é o do comando do domínio). O envelope SQS é do M5.)* *(M10, 30/09: o envelope real no U05b `TestPayloadHashHTTPEqualsSQS` (M5); entre canais: `TestConsumeWagerReplayAcrossChannels` e C10a `TestHTTPThenSQSSameOperation`.)*
 - [x] **IDEM-05** Mesma chave e mesmo conteúdo: devolve o resultado persistido com `idempotentReplay: true`. *(M1, 29/09: `TestIdempotencyDecision`.)*
 - [x] **IDEM-06** Mesma chave com conteúdo diferente: conflito. *(M1, 29/09: `TestIdempotencyDecision`.)*
 - [x] **IDEM-07** ⛔ `(providerId, externalTransactionId)` não pode ser reaplicado usando outra chave. *(M1, 29/09: `TestIdempotencyDecision`.)* *(M2, 29/09: `wager_tx_external_id_uq`: `TestConstraints`, `TestTransactionQueries` (`ErrIdempotencyRace`).)*
@@ -220,7 +222,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [x] **SQS-07** Falha transitória leva a retry com backoff. Erro permanente ou tentativas esgotadas levam à DLQ. *(M5, 29/09: I04c `TestInvalidMessagesGoToDLQ`, I04d `TestTransientFailureRedrive`, `TestPermanentFailureToDLQ` (I03b pelo SQS), `TestRetryDelay`, `TestGroupOrder`, `TestDeadlineRelease`, `TestHealthGatePauses` (queda do banco não consome tentativas). A queda real do PostgreSQL com 3 processos é o R01 (M9).)* *(M9, 30/09: R01 `TestPostgresOutage`: 15 s de PostgreSQL congelado com tráfego SQS, o consumidor pausa e para de receber, e depois todas as mensagens são processadas uma vez, sem nenhuma na DLQ; sensibilidade: a pausa desligada ou sem efeito é detectada.)*
 - [x] **SQS-08** Com uma `PENDING_REFERENCE` já persistida, a mensagem pode ser concluída e o worker de referências assume a continuidade. *(M5, 29/09: `TestConsumeWager` grava a inbox `PENDING_REFERENCE` e `TestDecide` remove a mensagem. A continuidade é do worker (M6).)* *(M6, 30/09: `TestSQSPendingReferenceResolved`: o REFUND pelo SQS antes da BET fica pendente, a inbox registra `PENDING_REFERENCE`, a fila esvazia e o worker o resolve depois da BET.)*
 - [x] **SQS-09** Em `SIGTERM`, o consumidor para de buscar mensagens e conclui o trabalho em andamento dentro do prazo, ou libera a visibilidade para reentrega segura. *(M5, 29/09: `TestConsumerShutdown` (espera o que está em andamento, libera o que não começou, cancela e libera no prazo; goleak), I07b `TestFxLifecycle`; stop ordenado no compose (HTTP → consumidor → publisher). Limitação do long poll órfão no messaging §4.5. Com 30 mensagens e 3 processos no R03 (M9).)* *(M9, 30/09: R03 `TestGracefulShutdownSQS` com 3 processos: `SIGTERM` com 3 mensagens paradas no lock e 27 recebidas ou na fila; as 3 terminam na instância que para, nenhuma outra começa, a saída é 0 em menos de 5 s e outra instância processa o resto, cada mensagem uma vez.)*
-- [x] **SQS-10** Documentados: limites de tentativas, visibility timeout, tratamento de mensagens inválidas, `MessageGroupId` e `MessageDeduplicationId`. *(M5, 29/09: messaging.md §3–§4 e D-12, com a validação dos prazos (`TestValidate_RejectsInvalidValues`) e o contrato de entrada (`TestParseEnvelope`). O README fecha no M10.)*
+- [x] **SQS-10** Documentados: limites de tentativas, visibility timeout, tratamento de mensagens inválidas, `MessageGroupId` e `MessageDeduplicationId`. *(M5, 29/09: messaging.md §3–§4 e D-12, com a validação dos prazos (`TestValidate_RejectsInvalidValues`) e o contrato de entrada (`TestParseEnvelope`). O README fecha no M10.)* *(M10, 30/09: `README.md` §4.3 (parâmetros) e §5 (filas, DLQ e reprocessamento).)*
 - [x] **SQS-11** A concorrência entre as entradas HTTP e SQS foi validada. *(M5, 29/09: os dois canais em sequência (`TestSQSEndToEnd`, `TestConsumeWagerReplayAcrossChannels`) e 10 mensagens da mesma operação em paralelo (`TestConsumeWagerInboxRace`). HTTP e SQS ao mesmo tempo é o C10b (M8).)* *(M8, 30/09: C10b `TestHTTPAndSQSConcurrent`: a mesma operação e 100.00 contra 80.00 por HTTP e 80.00 por SQS, com os dois canais parados no lock da carteira e soltos juntos (`raceBehindLock`); sem o `FOR UPDATE`, uma das apostas termina `FAILED`.)*
 
 ---
@@ -228,7 +230,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 ## 13. Transactional outbox e eventos (§5.4, §6.5, §11)
 
 - [x] **OUT-01** Tabela de outbox com: identidade estável do evento, agregado, tipo, payload (snapshot imutável), `occurredAt`, tentativas, próximo envio e `publishedAt`. *(M2, 29/09: `TestOutboxRepository`, `TestGuardTriggers` (`PDA05`), `TestConstraints`.)*
-- [~] **OUT-02** ⛔ Os registros de outbox são gravados atomicamente com o estado da operação, o saldo, o ledger e a inbox. *(M4, 29/09: outbox na mesma UoW do domínio desde o M3 (I03a `TestFinancialAtomicity`); só linhas confirmadas são publicadas (I05b `TestNoPublishBeforeCommit`). Falta a inbox (M5).)* *(M5, 29/09: a inbox na mesma UoW: `TestConsumeWagerAtomicInbox`.)*
+- [x] **OUT-02** ⛔ Os registros de outbox são gravados atomicamente com o estado da operação, o saldo, o ledger e a inbox. *(M4, 29/09: outbox na mesma UoW do domínio desde o M3 (I03a `TestFinancialAtomicity`); só linhas confirmadas são publicadas (I05b `TestNoPublishBeforeCommit`). Falta a inbox (M5).)* *(M5, 29/09: a inbox na mesma UoW: `TestConsumeWagerAtomicInbox`.)*
 - [x] **OUT-03** ⛔ Um worker separado publica a outbox e suporta múltiplos publishers, disputa por registros (ex.: `FOR UPDATE SKIP LOCKED` + lease) e recuperação de trabalho abandonado. *(M4, 29/09: I05a `TestOutboxConcurrentPublishers` (2 publishers com pools próprios, 200 eventos); `TestOutboxStore` (claims concorrentes disjuntos, lease vencido reassumido); I05d `TestOutboxLeaseRecovery`. Com 3 processos no M8 (C06).)*
 - [x] **OUT-04** Retry com backoff em falha de publicação. *(M4, 29/09: I05c `TestOutboxRetryBackoff`; `TestRetryDelay`; `TestPublisherSurvivesClaimFailures`; `TestOutboxBacklogGauges`.)* *(M9, 30/09: R02 `TestSQSOutage`: com o MiniStack congelado, a outbox acumula (`outbox_pending_events` > 0) e envelhece, e depois esvazia com todos os eventos na auditoria; um backoff sem teto é detectado.)*
 - [x] **OUT-05** Republicações preservam o `eventId`. *(M4, 29/09: `TestSNSSinkPublishInput` (payload da coluna, `MessageDeduplicationId = eventId`); I05a (conteúdo igual ao do banco); I05d (evento reassumido publicado com o mesmo `eventId`).)*
@@ -248,7 +250,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [x] **DB-01** PostgreSQL, com `pgx` e SQL explícito (preferencial; `sqlc` opcional). *(M2, 29/09: adapter `postgres`; `TestWalletRepository`, `TestTransactionRepository`.)*
 - [x] **DB-02** Transações, locks e constraints explícitos e verificáveis. *(M2, 29/09: `TestUnitOfWork` (commit, rollback, `lock_timeout`, snapshot), `TestPostgresErrorMapping`.)*
 - [x] **DB-03** ⛔ Unicidade, não negatividade e imutabilidade do ledger impostas pelo schema, pelas constraints e pelos mecanismos de proteção do banco. *(M2, 29/09: `TestConstraints`, `TestLedgerImmutable`, `TestLedgerCoupling`, `TestTerminalTransactionImmutable`, `TestGuardTriggers`.)*
-- [~] **DB-04** Migrations versionadas, com os comandos de aplicação e reversão documentados. *(M2, 29/09: `TestMigrationsUpDownUp`; comandos em `data-model.md` §7 e no `Makefile`. Falta o README (M10).)*
+- [x] **DB-04** Migrations versionadas, com os comandos de aplicação e reversão documentados. *(M2, 29/09: `TestMigrationsUpDownUp`; comandos em `data-model.md` §7 e no `Makefile`. Falta o README (M10).)* *(M10, 30/09: `README.md` §6; `make migrate-down N=1` e `make migrate-up` executados no compose (versão 6 → 5 → 6).)*
 - [x] **DB-05** `ARCHITECTURE.md` documenta a biblioteca escolhida, o mapeamento de `Money` e como a transação SQL é delimitada entre os repositórios. *(M2, 29/09: `ARCHITECTURE.md` §2 e §3.)*
 
 ---
@@ -286,12 +288,12 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ### 17.2 Integração (containers reais: PostgreSQL, IdP e LocalStack/MiniStack)
 
-- [ ] **TST-I01** Migrations: `up` e `down`.
-- [ ] **TST-I02** Constraints e imutabilidade do ledger.
+- [x] **TST-I01** Migrations: `up` e `down`. *(M2, 29/09: I01 `TestMigrationsUpDownUp` (`up` → `down -all` → `up`, schema idêntico); todo pacote com tag aplica as migrations no próprio banco.)*
+- [x] **TST-I02** Constraints e imutabilidade do ledger. *(M2, 29/09: I02a `TestConstraints`, I02b `TestLedgerImmutable`/`TestLedgerImmutableForApp`, I02c `TestLedgerCoupling`, I02d `TestTerminalTransactionImmutable`, I02e `TestGuardTriggers`.)*
 - [x] **TST-I03** Atomicidade financeira. *(M3, 29/09: I03a `TestFinancialAtomicity` (M2) e I03b `TestPermanentFailureRecorded` (`FAILED` em UoW separada, replay com 500).)*
 - [x] **TST-I04** Inbox e reentrega. *(M5, 29/09: I04a–f e os testes do `ConsumeWager` (spec M5 §7).)*
 - [x] **TST-I05** Outbox concorrente, retry e DLQ. *(M4, 29/09: I05a–g. A DLQ vem no M5.)* *(M5, 29/09: DLQ por redrive (I04d) e por envio explícito (I04b, I04c, `TestPermanentFailureToDLQ`).)*
-- [ ] **TST-I06** Recuperação após reinicialização.
+- [x] **TST-I06** Recuperação após reinicialização. *(M6, 30/09: I06 `TestRecoveryAfterRestart`, I06b `TestPendingExpiresAfterDowntime`.)* *(M8, 30/09: C08a `TestFullRestart` com 3 processos.)*
 - [x] **TST-I07** Composição Fx: validação do grafo, start e stop, e liberação dos recursos dos workers (sem goroutines vazadas). *(M7, 30/09: `TestFxGraph`/`TestOptionsFor` (I07a), `TestFxLifecycle` (I07b), `TestFxFailFast` (I07c), `TestFxRoles` (I27).)*
 
 ### 17.3 Autenticação e autorização
@@ -323,11 +325,11 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ## 18. Documentação da entrega (§15)
 
-- [ ] **DOC-01** O `README.md` cobre: pré-requisitos, variáveis de ambiente, inicialização das filas, aplicação e reversão das migrations, execução da aplicação, exemplos de chamadas (incluindo como obter o token) e comandos de teste.
-- [~] **DOC-02** O `ARCHITECTURE.md` registra as decisões sobre: dinheiro, transações, idempotência, locks, referências pendentes, reversões, inbox/outbox, autenticação, autorização, uso do Fx e shutdown. Também reúne as justificativas pedidas ao longo do desafio (IdP, biblioteca de banco, mapeamento de Money, fronteira transacional, concorrência, máquina de estados, falhas transitórias vs permanentes, hash, códigos HTTP, parâmetros SQS e roteamento de eventos).
-- [~] **DOC-03** O `ARCHITECTURE.md` explicita limitações, interpretações adotadas e trabalho não concluído. *(Interpretações e limitações escritas em 28/09; trabalho não concluído é fechado na entrega.)*
-- [ ] **DOC-04** Há um documento separado sobre como preparar as dependências dos testes e executar a integração, as múltiplas instâncias e as simulações de falha, incluindo build tags, se usadas.
-- [ ] **DOC-05** Há instruções para executar os fluxos autenticados com as identidades de teste provisionadas.
+- [x] **DOC-01** O `README.md` cobre: pré-requisitos, variáveis de ambiente, inicialização das filas, aplicação e reversão das migrations, execução da aplicação, exemplos de chamadas (incluindo como obter o token) e comandos de teste. *(M10, 30/09: `README.md` §1–§9, com os comandos e exemplos executados contra o compose e os tempos dos testes medidos; a execução a partir de um clone limpo é o M11.)*
+- [x] **DOC-02** O `ARCHITECTURE.md` registra as decisões sobre: dinheiro, transações, idempotência, locks, referências pendentes, reversões, inbox/outbox, autenticação, autorização, uso do Fx e shutdown. Também reúne as justificativas pedidas ao longo do desafio (IdP, biblioteca de banco, mapeamento de Money, fronteira transacional, concorrência, máquina de estados, falhas transitórias vs permanentes, hash, códigos HTTP, parâmetros SQS e roteamento de eventos). *(M10, 30/09: `ARCHITECTURE.md` §2–§14, revisado contra o código.)*
+- [x] **DOC-03** O `ARCHITECTURE.md` explicita limitações, interpretações adotadas e trabalho não concluído. *(Interpretações e limitações escritas em 28/09; trabalho não concluído é fechado na entrega.)* *(M10, 30/09: §15 (18 interpretações), §16 (18 limitações) e §17 (opcionais não feitos, fora do escopo e pendências menores).)*
+- [x] **DOC-04** Há um documento separado sobre como preparar as dependências dos testes e executar a integração, as múltiplas instâncias e as simulações de falha, incluindo build tags, se usadas. *(M10, 30/09: `docs/testing.md`, com as simulações manuais de queda do PostgreSQL e do MiniStack executadas no compose.)*
+- [x] **DOC-05** Há instruções para executar os fluxos autenticados com as identidades de teste provisionadas. *(M10, 30/09: `README.md` §7 (os 7 clients e a obtenção do token) e §8 (fluxo completo com tokens reais, inclusive o SQS com as credenciais IAM do provedor); `api/requests.http`.)*
 - [x] **DOC-06** ⭐ Contrato OpenAPI (`api/openapi.yaml`) servido em `/openapi.yaml`, Swagger UI autenticável em `/docs` e coleção `api/requests.http`, com o contrato validado nos testes (D-20). *(M3, 29/09: `api/openapi.yaml`, `/docs`, `/openapi.yaml` e `api/requests.http`; I15 `TestOpenAPIContract`; `TestContract` (o validador do `testkit`); `TestEdgeDocs`.)*
 
 ### 18.1 Onde cada exigência de documentação é atendida
@@ -336,7 +338,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 | --- | --- |
 | Escolha do IdP, validação de credenciais, modelo de permissões (§2) | `ARCHITECTURE.md` §10 · D-07 |
 | Biblioteca de banco, mapeamento de `Money`, delimitação da transação (§4) | `ARCHITECTURE.md` §2–§3 · D-01, D-03, D-14 |
-| Aplicação e reversão das migrations (§4, §15) | `README.md` (M10) · `data-model.md` §7 |
+| Aplicação e reversão das migrations (§4, §15) | `README.md` §6 · `data-model.md` §7 |
 | Representação e limites de `Money`; normalização antes do hash (§6.1) | `ARCHITECTURE.md` §2 · D-03, D-08 |
 | Estratégia de concorrência (§6.2) | `ARCHITECTURE.md` §4 · D-09 |
 | Máquina de estados; falha transitória × permanente (§6.3) | `ARCHITECTURE.md` §5 · `transaction-lifecycle.md` §1, §8 |
@@ -347,9 +349,9 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 | Contratos de roteamento e consumo dos eventos (§11) | `ARCHITECTURE.md` §9.2 · `messaging.md` §5–§7 |
 | Decisões de dinheiro, transações, idempotência, locks, referências, reversões, inbox/outbox, auth, Fx e shutdown (§15) | `ARCHITECTURE.md` §2–§12 |
 | Limitações, interpretações e trabalho não concluído (§15) | `ARCHITECTURE.md` §15–§17 |
-| README: pré-requisitos, variáveis, filas, migrations, execução, exemplos, testes, IdP e identidades (§15) | `README.md` (M10) |
-| Preparação dos testes, integração, multi-instância, falhas e build tags, em documento separado (§15) | `docs/testing.md` (M10) |
-| Teste de carga ⭐ (§14) | `docs/load-test.md` (M12) |
+| README: pré-requisitos, variáveis, filas, migrations, execução, exemplos, testes, IdP e identidades (§15) | `README.md` §1–§9 |
+| Preparação dos testes, integração, multi-instância, falhas e build tags, em documento separado (§15) | `docs/testing.md` |
+| Teste de carga ⭐ (§14) | Não feito (`ARCHITECTURE.md` §17) |
 
 ---
 
