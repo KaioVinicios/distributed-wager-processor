@@ -245,7 +245,7 @@ pda/
 │       ├── plans/                          # planos por marco (superpowers:writing-plans)
 │       └── spike-*.md                      # resultados de spikes
 │
-├── .github/workflows/ci.yml ⭐             # lint + testes unitários (+ integração)
+├── .github/workflows/ci.yml               # CI só de testes: jobs `unit` (make test) e `integration` (make test-integration com o compose); e2e no M8
 ├── .dockerignore
 ├── .editorconfig
 ├── .env.example

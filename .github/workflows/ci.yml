@@ -1,0 +1,48 @@
+# Runs the unit and integration suites (docs/test-plan.md). Lint, build and
+# deploy stay out on purpose; the e2e job arrives with make test-e2e (M8).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go test -race ./...
+        run: make test
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # infra-up: PostgreSQL, Keycloak and MiniStack from the compose, then
+      # aws-init (queues, topic, IAM users, .local/aws/credentials) and migrate.
+      - name: make test-integration
+        run: make test-integration
+      - name: Compose logs
+        if: failure()
+        run: docker compose logs --no-color postgres keycloak ministack aws-init migrate
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
