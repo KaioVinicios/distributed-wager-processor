@@ -382,3 +382,5 @@ Emitido **uma vez**, quando a operação entra em `PENDING_REFERENCE`. As novas 
 | `reference_pending_transactions` | gauge | — (operações em `PENDING_REFERENCE`, atualizado no máximo 1×/s pelo worker) |
 | `reference_retries_total` | counter | — (tentativas reagendadas) |
 | `reference_expired_total` | counter | — (rejeições por `REFERENCE_NOT_FOUND`) |
+
+No M7, o `app` passa a contar `wager_duplicates_total{channel="http"}` (o consumidor continua contando `channel="sqs"`, então nada é contado em dobro), `wager_transactions_total`, `wager_processing_duration_seconds`, `concurrency_conflicts_total` e `reconciliation_runs_total`; o `httpapi` conta `http_requests_total`, `http_request_duration_seconds` e `auth_failures_total`. O catálogo completo está no [`ARCHITECTURE.md`](../ARCHITECTURE.md) §13.2.

@@ -136,11 +136,22 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
   - 13 sabotagens detectadas e 3 não detectadas pelos testes a que se destinavam (as duas de mistura, cobertas por testes determinísticos, e a do SQS, coberta pelo `TestDecide`);
   - compose com as 3 réplicas: REFUND na réplica 1, BET na 2, REFUND resolvido e lido pela 3, reconciliação consistente; expiração real em cerca de 3,5 min com 7 retries distribuídos entre as 3 réplicas (`reference_retries_total` 1+5+1, `reference_expired_total` 1); parada de uma réplica na ordem HTTP → consumidor → publisher → worker.
 
+## 30/09/2026 (qua): M7, observabilidade e papéis do processo
+
+- [Spec](specs/2026-09-30-m7-observability-design.md) → [plano](plans/2026-09-30-m7-observability.md) → execução inline com TDD.
+- **Decisão do autor:** o `/health/ready` segue sempre com PostgreSQL + SQS (HTTP-08), qualquer que seja o conjunto de papéis.
+- **Entregue:**
+  - `config.Roles` e `bootstrap.OptionsFor` (flags de papel), `app.Metrics` ampliada, os coletores que faltavam (`wager_transactions_total`, `concurrency_conflicts_total`, `reconciliation_runs_total`, `auth_failures_total`, `http_*`), a linha `wager concluded` e o WARN da reconciliação sem saldos;
+  - testes: U20–U23, I25–I27, I14 e a ordem de parada no I07b.
+- **Ajustes ao plano:** `WagerDuplicate` no lugar de `Duplicate` (a `observability.Metrics` já tinha o método do consumidor); sem helper de chaves de log; `version_mismatch` removida; IDs I25–I27 (o I24 já existia); o 503 real com o PostgreSQL parado ficou com o R01.
+- **Achados da execução:** o primeiro desenho do I14 só olhava linhas com o id da carteira, e um vazamento do header no log de acesso passaria; passou a varrer todo o log com marcadores únicos. `MetricValue` devolve `int64` para não abrir exceção no `forbidigo` do E3.
+
 ## Onde paramos
 
-- **M6 concluído (commits aguardando autorização).** Próximo passo: **M7, observabilidade**, começando pela spec.
+- **M7 concluído (commits aguardando autorização).** Próximo passo: **M8, harness e2e e cenários multi-instância**, começando pela spec.
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - decidir se os 3 minors do M0 entram em algum marco;
+  - **flake em investigação (M7, 30/09):** `TestMigrationsUpDownUp` (`internal/adapters/postgres`) falhou uma vez em três execuções completas do `make test-integration`, com `drop database: testkit: DROP: ERROR: permission denied to terminate process (SQLSTATE 42501)`. Passou nas duas execuções seguintes e, isolado, passa com e sem as mudanças do M7. Não toca em código do marco; hipótese não verificada: outra conexão do pacote em paralelo segurando o banco de teste na hora do `DROP`. Autor decidiu não investigar agora; se voltar a aparecer, reproduzir com `-count` alto no pacote e olhar as conexões abertas em `pg_stat_activity` antes do `DROP`;
   - minors adiados na revisão do M2: inbox aceita instantes zerados; repositórios sobre o pool podem escrever fora do UoW (só a convenção da D-14 impede). O filtro de ID malformado de `List`/`Sum`/`AdvanceDependents` ficou resolvido no M3, pelos casos de uso (decisão 8);
-  - minors adiados na revisão do M3: o log de acesso grava `route` vazio para rotas inexistentes; o WARN da reconciliação registra os três saldos (confirmar a política no I14 do M7); o `settleAndPersist` com `insert = false` ganhou teste no M6 (`TestResolveReferences`).
+  - minors adiados na revisão do M3: o log de acesso gravava `route` vazio e o WARN da reconciliação registrava os saldos (ambos resolvidos no M7); o `settleAndPersist` com `insert = false` ganhou teste no M6 (`TestResolveReferences`).

@@ -409,7 +409,7 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
   3. o publisher da outbox e o worker de referências são encerrados;
   4. por último, o pool do PostgreSQL e os clientes AWS são fechados.
 - **Workers:** cada um recebe um `context` cancelável e um `sync.WaitGroup`. O `OnStop` cancela e espera até o prazo, registrando em log o início e o fim.
-- **Entrega das flags de papel:** as quatro flags entram juntas no M7 (FX-*), porque excluir um módulo do grafo exige que o `bootstrap.Options()` conheça a configuração antes de montar o grafo. Até lá, todos os papéis rodam em todas as instâncias.
+- **Flags de papel (entregues no M7):** `bootstrap.OptionsFor(config.Roles)` monta o grafo sem os módulos dos papéis desligados; `bootstrap.Options()` lê as quatro variáveis (`config.RolesFromEnv`) antes do Fx, e um valor inválido aborta o start nomeando a variável, sem ecoar o valor. O servidor admin e a `observability` ficam sempre; o `auth` entra junto com o HTTP. Todos os papéis desligados é válido (só o admin sobe, com um `WARN`). Com `HTTP_ENABLED=false` não há rotas de health, porque elas vivem no `httpapi`.
 - **Compose:** o serviço `app` roda com 3 réplicas (`app-1`, `app-2`, `app-3`), cada uma com seu pool e sua memória. Portas no host: API em `8081`, `8082` e `8083`, métricas em `9091`, `9092` e `9093`, e Keycloak em `8080`.
 - **Arquitetura verificável:** um teste garante que o pacote `domain` não importa `fx`, `net/http`, `aws` nem `pgx`.
 
@@ -453,8 +453,15 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
 ## D-18 — Observabilidade ⚙️ [OBS-*]
 
 - **Logs:** slog JSON com `correlationId` (vem do header `X-Correlation-Id`, aceito só com até 128 caracteres `[A-Za-z0-9._-]`, ou é gerado; é propagado pelos eventos), `messageId`, `transactionId`, `walletId` e `providerId`. Nunca registram tokens, secrets nem o payload completo. **Ordem dos middlewares HTTP** (spec do M3): correlação → log de acesso → recuperação de `panic` → fallback de rota; assim o 500 de um `panic` tem `correlationId` e entra no log de acesso.
-- **Métricas:** `/metrics` fica na porta administrativa `:9090`, separada da API e não exposta como rota de negócio. O catálogo de métricas está no [`ARCHITECTURE.md`](../ARCHITECTURE.md) §13.2. O `app` não importa Prometheus: ele declara a porta `app.Metrics`, e a `observability` a implementa. No M3 a porta tem só `ReconciliationDivergence()` (`reconciliation_divergences_total`); o M7 acrescenta os demais métodos.
-- **Readiness:** `/health/ready` faz ping no PostgreSQL e chama `GetQueueAttributes` na fila principal, com timeout de 2 s cada.
+- **Métricas:** `/metrics` fica na porta administrativa `:9090`, separada da API e não exposta como rota de negócio. O catálogo de métricas está no [`ARCHITECTURE.md`](../ARCHITECTURE.md) §13.2. O `app` não importa Prometheus: ele declara a porta `app.Metrics`, e a `observability` a implementa. A porta ganhou no M7 `Reconciled`, `WagerConcluded`, `WagerDuplicate` e `Conflict`; o `httpapi` declara a sua própria (`HTTPRequest`, `AuthFailure`).
+- **Readiness:** `/health/ready` faz ping no PostgreSQL e chama `GetQueueAttributes` na fila principal, com timeout de 2 s cada. **Sempre os dois**, qualquer que seja o conjunto de papéis (HTTP-08 fixa o contrato; ambos os clientes continuam no grafo).
+- **Delta do M7:**
+  - uma linha `wager concluded` por conclusão no `ProcessWager` (HTTP, SQS e replays), com `transactionId`, `walletId`, `providerId`, `correlationId`, `channel`, `kind`, `outcome`, `failureCode`, `replay` e, no SQS, `messageId`; nunca valores, chaves de idempotência nem corpos. O worker de referências mantém as suas linhas próprias;
+  - o WARN da reconciliação não registra mais saldos (só `walletId`, `correlationId` e `entries`);
+  - `concurrency_conflicts_total{reason}` tem `lock_timeout` (`55P03` e deadlock `40P01`, via `app.ErrLockTimeout`) e `unique_race`; a label `version_mismatch` saiu, porque a estratégia é pessimista e nenhum caminho a produz;
+  - `wager_transactions_total` e `wager_processing_duration_seconds` ganham `channel` = `http`, `sqs` ou `worker`; as duplicatas do SQS continuam contadas pelo consumidor, e o `app` só conta as do HTTP;
+  - `http_requests_total` e `http_request_duration_seconds` usam o **padrão** da rota (`POST /wallets/{walletId}/reconciliation`) e `unmatched` para o que não casa; o log de acesso grava o mesmo `route`;
+  - `auth_failures_total{reason}`: `unauthenticated`, `forbidden` e `provider_mismatch`.
 
 ---
 

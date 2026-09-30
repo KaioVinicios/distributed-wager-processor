@@ -148,12 +148,20 @@ Estimativas em horas de trabalho efetivo, **incluindo a spec e o plano** de cada
 
 **Cobre:** OPS-12..14, TX-09 (em processo), SQS-08, TST-I06, I11; parciais: OBS-03, FX-01, FX-03, E7 (a prova com 3 processos é do C08b, M8). Spec: [`dev/specs/2026-09-30-m6-reference-worker-design.md`](dev/specs/2026-09-30-m6-reference-worker-design.md) · plano: [`dev/plans/2026-09-30-m6-reference-worker.md`](dev/plans/2026-09-30-m6-reference-worker.md).
 
-#### M7 — Observabilidade (~1 h)
+#### M7 — Observabilidade (~1 h) — ✅ concluído em 30/09
 
 - Métricas do catálogo (D-18 + [`messaging.md`](messaging.md) §8), servidor admin `:9090`, campos de log padronizados e a verificação de ausência de segredos nos logs.
 - Testes I13, I14 e I07a–c (Fx).
 
-**Cobre:** OBS-01..04, FX-*.
+- **Entregue também:**
+  - as flags de papel (`HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED`, `REFERENCE_WORKER_ENABLED`) em `bootstrap.OptionsFor(config.Roles)`, com `TestFxRoles`;
+  - `app.ErrLockTimeout` (o adapter traduz `55P03` e `40P01`) para o `concurrency_conflicts_total`;
+  - a linha `wager concluded` por conclusão (HTTP, SQS e replays);
+  - o WARN da reconciliação sem saldos, e o `route` do log de acesso com `unmatched`.
+- **Decisão de escopo:** o `/health/ready` continua sempre com PostgreSQL + SQS (HTTP-08). O 503 com o PostgreSQL de fato parado é o R01 (M9).
+- **Ajuste:** a label `version_mismatch` do `concurrency_conflicts_total` saiu, porque a estratégia é pessimista e nenhum caminho a produz.
+
+**Cobre:** OBS-01..04, FX-01, FX-03, FX-05; FX-04 em processo (R03 e R04 no M9). Spec: [`dev/specs/2026-09-30-m7-observability-design.md`](dev/specs/2026-09-30-m7-observability-design.md) · plano: [`dev/plans/2026-09-30-m7-observability.md`](dev/plans/2026-09-30-m7-observability.md).
 
 #### M8 — Harness e2e e cenários multi-instância (~3 h)
 
@@ -233,6 +241,7 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 | Long poll órfão no shutdown do consumidor | Mensagem liberada volta só depois de um visibility timeout | Aceito e documentado (messaging §4.5): sem perda nem duplicidade |
 | Duas instâncias contam a mesma tentativa de uma pendência | Expiração antes do limite | ✅ Tratado no M6: o recheck sob os locks confere status e horário (`TestResolveReferencesSkips`, `TestResolveReferencesConcurrent`) |
 | Deadlock entre o worker e o HTTP por ordem de lock invertida | `40P01` ou lock timeout | ✅ Tratado no M6: carteira → transação, provado por `TestResolveReferencesLockOrder` |
+| `TestMigrationsUpDownUp` falha de forma intermitente (visto 1 vez em 3 execuções completas, no M7) | `permission denied to terminate process (42501)` ao derrubar o banco de teste; passa isolado | Não investigado (decisão do autor em 30/09). Hipótese: conexão de outro pacote em paralelo segurando o banco no `DROP`. Se reaparecer, reproduzir com `-count` alto e olhar `pg_stat_activity` antes do `DROP` (diário, "Onde paramos") |
 | Estouro de prazo | Checkpoint do dia não atingido | Ordem de corte (§4), sempre preservando os eliminatórios |
 
 ---

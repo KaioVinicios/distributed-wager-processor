@@ -322,7 +322,7 @@ flowchart TD
   - o HTTP é o último a iniciar, então só aceita tráfego com tudo pronto, e o primeiro a parar;
   - em seguida param o consumidor, o publisher e o worker de referências;
   - o pool do PostgreSQL e os clientes AWS fecham depois de todos os componentes que os usam (FX-04, FX-05).
-- **Papéis habilitáveis:** os módulos `httpapi`, `sqsconsumer`, `outbox` e `references` só são incluídos se `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED` forem verdadeiros (D-15).
+- **Papéis habilitáveis (M7):** `bootstrap.Options()` lê `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED` (`config.RolesFromEnv`) e chama `bootstrap.OptionsFor(config.Roles)`, que só inclui os módulos `httpapi` (com o `auth`), `sqsconsumer`, `outbox` e `references` dos papéis ligados (D-15). O admin e a `observability` ficam sempre.
 - **`fx.Invoke`:** força a instanciação dos componentes com lifecycle (servidor, consumidor, publisher, worker), que de outra forma não seriam construídos por falta de dependentes.
 
 ---

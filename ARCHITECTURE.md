@@ -361,7 +361,8 @@ O Fx executa os `OnStart` na ordem de registro e os `OnStop` na ordem inversa. A
 JSON estruturado (`log/slog`), com chaves em `camelCase`:
 - **Identificadores**, quando disponíveis: `correlationId`, `messageId`, `transactionId`, `walletId`, `providerId`.
 - **Propagação do `correlationId`:** vem do header `X-Correlation-Id` (ou é gerado), ou do atributo da mensagem SQS. É gravado na transação e segue nos eventos.
-- **Nunca são registrados:** tokens, headers de autorização, segredos e payloads financeiros completos.
+- **Uma linha por conclusão:** `wager concluded`, com os cinco identificadores (o `messageId` só no SQS), `channel`, `kind`, `outcome`, `failureCode` e `replay`. Vale para HTTP, SQS e replays. O log de acesso usa o padrão da rota (`unmatched` quando nenhuma casa).
+- **Nunca são registrados:** tokens, headers de autorização, a `Idempotency-Key`, segredos, valores (`amount`, saldos) e corpos. O WARN da reconciliação traz só `walletId`, `correlationId` e `entries`; os saldos ficam na resposta ao chamador autorizado. O teste `TestLogsHaveIdsWithoutSecrets` prova isso com marcadores únicos.
 
 ### 13.2 Métricas
 
@@ -369,10 +370,10 @@ As métricas Prometheus ficam em `/metrics`, em uma porta administrativa separad
 
 | Métrica | Tipo | Labels | Atende |
 | --- | --- | --- | --- |
-| `wager_transactions_total` | counter | `channel`, `kind`, `outcome`, `failure_code` | Resultados por status |
+| `wager_transactions_total` | counter | `channel` (`http`, `sqs`, `worker`), `kind`, `outcome`, `failure_code` | Resultados por status |
 | `wager_processing_duration_seconds` | histogram | `channel`, `outcome` | Latência de processamento |
 | `wager_duplicates_total` | counter | `channel`, `layer` (`inbox`, `idempotency`) | Duplicatas |
-| `concurrency_conflicts_total` | counter | `reason` (`lock_timeout`, `unique_race`, `version_mismatch`) | Conflitos de concorrência |
+| `concurrency_conflicts_total` | counter | `reason` (`lock_timeout`, `unique_race`) | Conflitos de concorrência |
 | `reference_pending_transactions` | gauge | — | Pendências abertas (atualizado pelo worker no máximo 1×/s) |
 | `reference_retries_total` / `reference_expired_total` | counter | — | Retries e expirações de referência |
 | `sqs_messages_processed_total` | counter | `outcome` | Resultados no SQS |
@@ -383,11 +384,12 @@ As métricas Prometheus ficam em `/metrics`, em uma porta administrativa separad
 | `outbox_publish_lag_seconds` | histogram | `event_type` | Atraso da outbox (publicação − ocorrência) |
 | `outbox_published_total` / `outbox_publish_failures_total` / `outbox_lease_reclaims_total` | counter | `event_type` / — | Publicação, retries e recuperação |
 
-As 6 métricas de outbox estão implementadas desde o M4; os gauges são atualizados pelo próprio publisher, no máximo 1×/s. As de SQS (`sqs_*` e `wager_duplicates_total` com `channel="sqs"`) estão implementadas desde o M5, mais `sqs_delete_errors_total` (`DeleteMessage` que falhou depois do commit). As demais chegam no M7.
 | `reconciliation_runs_total` | counter | `consistent` | Reconciliações |
 | `reconciliation_divergences_total` | counter | — | Divergências de reconciliação |
 | `auth_failures_total` | counter | `reason` (`unauthenticated`, `forbidden`, `provider_mismatch`) | Diagnóstico de acesso |
-| `http_requests_total` / `http_request_duration_seconds` | counter / histogram | `route`, `method`, `status` | Tráfego HTTP |
+| `http_requests_total` / `http_request_duration_seconds` | counter / histogram | `route` (padrão da rota ou `unmatched`), `method`, `status` | Tráfego HTTP |
+
+O catálogo está completo desde o M7. Os gauges da outbox e o de referências são atualizados pelos próprios workers, no máximo 1×/s. `version_mismatch` não existe: o controle é pessimista (§4) e nenhum caminho produziria a label.
 
 Métricas auxiliares do consumidor (`sqs_messages_received_total`, `sqs_receive_errors_total`) estão em [`docs/messaging.md`](docs/messaging.md) §8.
 
@@ -396,6 +398,7 @@ Métricas auxiliares do consumidor (`sqs_messages_received_total`, `sqs_receive_
 - `GET /health/live`: o processo está de pé.
 - `GET /health/ready`: PostgreSQL (ping) **e** SQS (`GetQueueAttributes`), executados em paralelo, com 2 s de timeout cada, mesmo que a dependência ignore o cancelamento. Responde 503 enquanto uma dependência estiver indisponível.
 - **Corpo:** `{"status":"UP|DOWN","checks":{"postgres":"UP","sqs":"DOWN"}}`. O motivo de uma falha vai só para o log, nunca para a resposta.
+- **Sempre os dois:** o ready checa PostgreSQL e SQS qualquer que seja o conjunto de papéis ligados. Com `HTTP_ENABLED=false` não há rotas de health (elas vivem no `httpapi`); o admin `:9090` serve só `/metrics`.
 - **Healthcheck do container:** a imagem distroless não tem shell nem `curl`, então o compose usa o próprio binário (`pda healthcheck`), que consulta o `/health/ready` local.
 
 **Reconciliação:** `POST /wallets/{id}/reconciliation` reconstrói o saldo a partir do ledger em uma transação `REPEATABLE READ READ ONLY` (visão consistente). Calcula `difference = stored − calculated`. As divergências aparecem na resposta, no log e na métrica, e **nada é alterado**.
@@ -473,7 +476,7 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 9. **Segredos** do `.env.example` e do realm são valores locais de teste. Não há integração com um gerenciador de segredos nem rotação de credenciais.
 10. **Não há rate limiting** nem cotas por provedor.
 11. **Um erro permanente do SNS não descarta o evento.** Um tópico apagado ou uma política revogada fazem a outbox acumular (`outbox_oldest_pending_age_seconds` sobe) até a intervenção; nada confirmado se perde.
-12. **Todos os papéis rodam em todas as instâncias** até o M7, quando entram as flags `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED` (D-15).
+12. **Papéis por env (D-15).** `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED` (todos `true` por padrão) tiram o módulo do grafo; o admin `:9090` sempre sobe. O `/health/ready` continua exigindo PostgreSQL e SQS.
 13. **A espera por referências é finita.** Uma reversão cuja referência fique retida além do limite (por exemplo, numa indisponibilidade prolongada da fila) é rejeitada com `REFERENCE_NOT_FOUND`. O limite é configurável (`REFERENCE_MAX_ATTEMPTS`, `REFERENCE_TTL`).
 
 14. **Ciclo de lock entre carteiras diferentes que se referenciam.** A antecipação de dependentes atualiza linhas de pendências de outra carteira sem travá-la. Duas pendências que se referenciam de carteiras diferentes poderiam, em teoria, formar um ciclo entre o worker e uma requisição HTTP. Isso já vale para o caminho HTTP desde o M3, e o `lock_timeout` o transforma num erro transitório (503 ou nova tentativa do worker); a ordem carteira → transação dentro da mesma carteira é provada por `TestResolveReferencesLockOrder`.
