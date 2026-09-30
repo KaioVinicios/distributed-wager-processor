@@ -74,6 +74,7 @@ func outboxCount(t *testing.T, walletID string) int {
 }
 
 // Covers: WAL-06, LED-05, TX-09, OPS-01..10, OPS-12, OUT-02, E9 (I17)
+// Sensitivity: an AdvanceDependents that writes nothing → refund-2 keeps its original schedule, not bet-3's conclusion.
 //
 // Every kind, written through the repositories the way the use cases will,
 // passes the triggers: the domain of M1 and the schema agree.
@@ -122,8 +123,11 @@ func TestDomainFlowsPersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !pending.NextAttemptAt().Before(byExt["refund-2"].NextAttemptAt()) {
-		t.Fatalf("refund-2 was not advanced: next attempt %v", pending.NextAttemptAt())
+	// The conclusion of bet-3 advanced refund-2 to its own instant: AdvanceDependents
+	// gets the now of the conclusion (D-11). Comparing with the original schedule
+	// would race the clock: bet-3 may conclude after refund-2's first retry.
+	if !pending.NextAttemptAt().Equal(byExt["bet-3"].CompletedAt()) {
+		t.Fatalf("refund-2 next attempt %v, want the conclusion of bet-3 %v", pending.NextAttemptAt(), byExt["bet-3"].CompletedAt())
 	}
 	if got := resume(t, pending.ID()); got.Status() != wagering.StatusProcessed || got.ReferenceTransactionID() != byExt["bet-3"].ID() {
 		t.Fatalf("refund-2 after the worker: %s, reference %s", got.Status(), got.ReferenceTransactionID())
