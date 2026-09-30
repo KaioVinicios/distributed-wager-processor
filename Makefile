@@ -20,6 +20,12 @@ down:
 
 # aws-init and migrate are one-shot: they run once their dependencies are healthy.
 infra-up:
+	@# A service left paused by an interrupted outage test (test-plan §3.4) is
+	@# unpaused and given one healthcheck interval before the wait (docker
+	@# reports a paused container unhealthy, and --wait gives up on it). One
+	@# service per command: unpause fails as a whole if one is not paused.
+	-$(COMPOSE) unpause postgres 2>/dev/null && sleep 3
+	-$(COMPOSE) unpause ministack 2>/dev/null && sleep 3
 	$(COMPOSE) up -d --wait $(INFRA_SERVICES)
 	$(COMPOSE) up aws-init --exit-code-from aws-init
 	$(COMPOSE) up migrate --exit-code-from migrate
