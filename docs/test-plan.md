@@ -195,6 +195,8 @@ Um ponto dispara **sempre na primeira passagem**, sem contador nem filtro por op
 | U28 | M8, `testkit`: `TestEnvOf` (o ambiente escrito para os processos do cluster, lido pela mesma biblioteca do binário, devolve a `Config` e os `Roles`) | spec M8, decisão 6 |
 | U29 | M8, `testkit`: `TestHarnessPick` (round-robin só entre instâncias vivas e desarmadas) e `TestClientTryReportsTransportError` | TST-C04 |
 | U30 | M9: `TestEdgeRequestDeadline` (`httpapi`: uma rota autenticada com o caso de uso preso responde 503 `TEMPORARILY_UNAVAILABLE` com `Retry-After: 1` depois de `HTTP_REQUEST_TIMEOUT`; o `/health/ready` não recebe o prazo) e os casos `request timeout at lock timeout`/`at write timeout` de `TestValidate_RejectsInvalidValues` (`config`) | D-04, HTTP-09, FX-02 |
+| U31 | Pendências do M0: `TestServeOnLifecycle_ShutsDownWhenServeFails` (`observability`: o teste fecha o listener sob o servidor, capturado pelo `BaseContext`, e o app do `fxtest` recebe um `ShutdownSignal` com `ExitCode == 1`, com o log `http server stopped unexpectedly`) e o U31b em `TestServeOnLifecycle_ServesUntilStopped` (um stop normal não chama o `Shutdown`) | FX-03, D-15 |
+| U32 | Pendências do M0: `TestFxEventsLogAtDebug` (`bootstrap`, sem infraestrutura: com `LOG_LEVEL=info`, nenhum evento do Fx aparece e o `invoke failed` sai em ERROR; com `debug`, o `provided` sai em DEBUG) | OBS-01, D-18 |
 
 ### 5.2 Integração (TST-I)
 

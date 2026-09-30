@@ -192,12 +192,25 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
   - o `contextcheck` recusou helpers com `t` dentro do `Eventually` (virou um `within` local), e o gerador de tráfego do R01 continuava chamando `t` depois de um teste que falhou (virou um `defer`).
 - **Sensibilidade:** 8 sabotagens detectadas nos 4 testes R (R01: 3, R02: 2, R03: 2, R04: 1) e 1 não detectável por construção (registrada no teste e no `ARCHITECTURE.md` §16).
 
+## 30/09/2026 (qua): pendências menores do M0
+
+- O autor decidiu corrigir, antes do M10, as 3 pendências adiadas no M0, em vez de registrá-las como limitação. [Spec](specs/2026-09-30-m0-minors-design.md) → [plano](plans/2026-09-30-m0-minors.md) → execução inline com TDD.
+- **Entregue:**
+  - um servidor HTTP (API ou admin) que para sozinho encerra o processo com código 1 pelo `fx.Shutdowner`, depois do stop ordenado (U31, U31b);
+  - `restart: on-failure` nas 3 réplicas;
+  - eventos do Fx em DEBUG (U32): o log de start de uma réplica caiu de dezenas de linhas com *stacktrace* para 10 linhas da aplicação.
+- **Prova:**
+  - reds pelo motivo certo (`no shutdown after the server stopped serving`; 47 eventos do Fx em INFO);
+  - sensibilidade do U31b (`a normal stop called Shutdown 1 times`);
+  - no compose, `kill -QUIT 1` na `app-1` (o runtime do Go sai com 2) e a réplica volta sozinha, *healthy*, com `RestartCount` = 1; um `docker compose kill` não a reinicia.
+- **Ajuste da execução:** o `docker compose config` também renderiza a extensão `x-app`, então a contagem de `on-failure` dá 4. A conferência por serviço mostra só as 3 réplicas.
+
 ## Onde paramos
 
 - **M9 concluído (commits aguardando autorização).** Todos os testes do plano estão implementados. Próximo passo: **M10, documentação de entrega** (README, `docs/testing.md`, que deve citar o cuidado do `pause` do test-plan §3.4, e o fecho do `ARCHITECTURE.md`).
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
-  - decidir se os 3 minors do M0 entram em algum marco;
+  - **os 3 minors do M0: resolvidos em 30/09** ([spec](specs/2026-09-30-m0-minors-design.md));
   - **flake do `TestMigrationsUpDownUp`: resolvido em 30/09** ([spec](specs/2026-09-30-test-db-drop-design.md)). Não era um flake do teste, mas um defeito do `testkit` que afetava todos os pacotes: o `DROP … WITH (FORCE)` falhava ao acaso, e fora do teste de migrations a falha era silenciosa;
   - minors adiados na revisão do M2: inbox aceita instantes zerados; repositórios sobre o pool podem escrever fora do UoW (só a convenção da D-14 impede). O filtro de ID malformado de `List`/`Sum`/`AdvanceDependents` ficou resolvido no M3, pelos casos de uso (decisão 8);
   - minors adiados na revisão do M3: o log de acesso gravava `route` vazio e o WARN da reconciliação registrava os saldos (ambos resolvidos no M7); o `settleAndPersist` com `insert = false` ganhou teste no M6 (`TestResolveReferences`).

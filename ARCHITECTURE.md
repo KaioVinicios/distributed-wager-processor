@@ -331,6 +331,7 @@ Detalhes: [`docs/decisions.md`](docs/decisions.md) D-07 e [`docs/messaging.md`](
 - **Health checks por composição:** cada adaptador contribui um *checker* por *value group* do Fx (`group:"health_checkers"`), e o `observability` só os agrega. Assim o pacote de observabilidade não depende de `pgx` nem do SDK AWS.
 - **Workers observáveis:** cada worker recebe um `context` cancelável e um `WaitGroup`, com prazos por item e logs de início e fim. O `OnStop` cancela e espera até o prazo.
 - **Papéis por ambiente:** `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED`. Os módulos desligados nem são incluídos no grafo.
+- **Servidor que para sozinho:** se o servidor da API ou o admin para de servir por conta própria, o `ServeOnLifecycle` registra o erro e pede ao Fx o encerramento com código 1 (`fx.Shutdowner`). O stop ordenado acontece como num `SIGTERM`, e o compose reinicia a réplica (`restart: on-failure`). Assim, uma réplica nunca fica de pé sem a API.
 - **Verificação:** testes de `fx.ValidateApp`, de start/stop com tráfego real e de ausência de goroutines vazadas (`goleak`).
 
 Detalhes: [`docs/structure.md`](docs/structure.md) §3 e [`docs/decisions.md`](docs/decisions.md) D-15.
@@ -367,6 +368,7 @@ JSON estruturado (`log/slog`), com chaves em `camelCase`:
 - **Propagação do `correlationId`:** vem do header `X-Correlation-Id` (ou é gerado), ou do atributo da mensagem SQS. É gravado na transação e segue nos eventos.
 - **Uma linha por conclusão:** `wager concluded`, com os cinco identificadores (o `messageId` só no SQS), `channel`, `kind`, `outcome`, `failureCode` e `replay`. Vale para HTTP, SQS e replays. O log de acesso usa o padrão da rota (`unmatched` quando nenhuma casa).
 - **Falhas também têm os IDs:** os logs de falha do consumidor SQS trazem `sqsMessageId`, `messageId`, `correlationId`, `walletId` e `providerId` (quando o envelope foi lido); os do publisher, `eventId`, `walletId` e `correlationId`. Os erros HTTP registram o `correlationId`, que os liga ao log de acesso (`route`, `providerId`).
+- **Ciclo de vida:** cada componente registra o próprio start e stop em INFO (`http server started`, `sqs consumer stopping`, `postgres pool closed`…). Os eventos internos do Fx ficam em DEBUG (`LOG_LEVEL=debug`), e os erros do Fx, em ERROR.
 - **Nunca são registrados:** tokens, headers de autorização, a `Idempotency-Key`, segredos, valores (`amount`, saldos) e corpos. O WARN da reconciliação traz só `walletId`, `correlationId` e `entries`; os saldos ficam na resposta ao chamador autorizado. O teste `TestLogsHaveIdsWithoutSecrets` prova isso com marcadores únicos.
 
 ### 13.2 Métricas
