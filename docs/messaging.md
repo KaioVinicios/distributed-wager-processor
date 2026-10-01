@@ -85,7 +85,7 @@ Exemplo, a política de identidade de `pda-wallet-service` (`deploy/aws/policies
 
 > **Limitações (D-02):**
 > - O emulador não verifica a assinatura SigV4: o principal é identificado só pelo access key id. A **autorização** é aplicada de verdade; a **autenticação** no broker é fraca localmente. Em produção, as credenciais viriam de roles IAM (IRSA ou task role), sem chaves estáticas.
-> - O consumidor **nunca** confia na origem: aplica todas as validações de domínio (D-07).
+> - O broker decide **quem pode enviar**; **quem é o provedor** vem do token do IdP anexado à mensagem (§3.2, D-23), não da chave IAM nem do corpo. O consumidor também aplica todas as validações de domínio (D-07).
 
 ---
 
@@ -131,8 +131,18 @@ A aplicação converte `data` no **mesmo comando de domínio** do HTTP, com `rec
 | `MessageGroupId` | `data.walletId` | Ordem por carteira e paralelismo entre carteiras. Um BET chega antes do REFUND correspondente, o que reduz as pendências de referência |
 | `MessageDeduplicationId` | `messageId` | Deduplicação de 5 minutos do FIFO. É **apenas uma otimização**: a garantia vem da inbox e da idempotência (CONC-03) |
 | Message attribute `correlationId` (opcional) | String | Propagado para logs e eventos. Se ausente, `correlationId = messageId` |
+| Message attribute `accessToken` (**obrigatório**) | String: o access token JWT do client do provedor (`client_credentials` no realm `pda`), sem `Bearer` | A identidade do provedor (D-23). É validado como no HTTP (D-07), mas com `exp` e `nbf` avaliados no `SentTimestamp` gravado pelo broker, então uma reentrega depois do `exp` continua válida. O `data.providerId` precisa ser o `provider_id` do token. Fica fora dos hashes (§3.3) |
 
-A correção **não** depende de o produtor seguir essa convenção. Um `MessageGroupId` diferente só afeta a ordem e o paralelismo. Um `MessageDeduplicationId` diferente para o mesmo `messageId` é barrado pela inbox.
+A correção **não** depende de o produtor seguir a convenção de `MessageGroupId` e `MessageDeduplicationId`. Um `MessageGroupId` diferente só afeta a ordem e o paralelismo. Um `MessageDeduplicationId` diferente para o mesmo `messageId` é barrado pela inbox. Já o `accessToken` é exigido: sem ele, ou com um token de outro provedor, a mensagem vai para a DLQ sem nenhum efeito (§4.4).
+
+Exemplo de envio (README §8.8):
+
+```sh
+aws_as provider-a sqs send-message --queue-url $QUEUE \
+  --message-group-id "$WALLET" --message-deduplication-id "msg-$R" \
+  --message-attributes "{\"accessToken\":{\"DataType\":\"String\",\"StringValue\":\"$PROVIDER_TOKEN\"}}" \
+  --message-body "…"
+```
 
 ### 3.3 Hashes
 
@@ -153,6 +163,7 @@ A correção **não** depende de o produtor seguir essa convenção. Um `Message
 | Mensagens por `ReceiveMessage` | 10 | `SQS_RECEIVE_BATCH` | Máximo do SQS |
 | Long polling | 20 s | `SQS_WAIT_TIME` | Cancelado imediatamente no shutdown |
 | Visibility timeout | 30 s | `SQS_VISIBILITY_TIMEOUT` | Enviado em cada `ReceiveMessage` |
+| Atributos pedidos | `MessageGroupId`, `ApproximateReceiveCount`, `SentTimestamp`; `correlationId`, `accessToken` | — | O `SentTimestamp` é o instante em que o token é avaliado (D-23) |
 | Prazo por mensagem | 10 s | `SQS_PROCESSING_TIMEOUT` | `context.WithTimeout`; o start falha se não for menor que o visibility timeout |
 | Processamento simultâneo | 16 | `SQS_MAX_IN_FLIGHT` | Semáforo por instância |
 | `maxReceiveCount` | 10 | Provisionamento | Tentativas antes da redrive para a DLQ |
@@ -169,6 +180,7 @@ A correção **não** depende de o produtor seguir essa convenção. Um `Message
 2. Grupos diferentes são processados **em paralelo**, e mensagens do mesmo grupo **em sequência**, na ordem recebida.
 3. Se uma mensagem do grupo falhar de forma transitória, as seguintes do mesmo grupo **não** são processadas e voltam com `ChangeMessageVisibility(0)`. O FIFO não entrega as mensagens seguintes de um grupo enquanto houver uma em andamento, então a ordem é preservada. Cada liberação conta um recebimento das seguintes: com uma falha transitória persistente na primeira, as seguintes do grupo também chegam à DLQ pela redrive, junto com ela (comportamento do FIFO).
    - **Liberação por prazo:** antes de começar cada mensagem, se o visibility restante (contado desde o recebimento) é menor que o `SQS_PROCESSING_TIMEOUT`, ela e as seguintes do grupo são liberadas sem processar (`sqs_retries_total{reason="deadline_release"}`). Nenhuma mensagem é processada depois de poder ter sido reentregue.
+   - **Autorização (D-23):** antes de ler o envelope, o consumidor autentica o `accessToken` no `SentTimestamp` e exige a role `provider`. Depois de ler, compara o `data.providerId` com o `provider_id` do token sempre que o campo vem no JSON. Como no HTTP, nada é consultado antes da autorização.
    - **Orquestração:** o caso de uso `app.ConsumeWager` consulta a inbox, valida e chama o `ProcessWager`, que grava a inbox em todo caminho de conclusão. Uma violação da PK da inbox no commit recomeça pela consulta à inbox.
 4. As ações por resultado seguem [`transaction-lifecycle.md`](transaction-lifecycle.md) §6.2. O resumo:
 
@@ -178,7 +190,9 @@ A correção **não** depende de o produtor seguir essa convenção. Um `Message
 | `FAILED` (falha permanente) | `FAILED` + inbox gravados em transação separada; envio explícito para a DLQ (§4.4), depois `DeleteMessage` |
 | Duplicata (inbox com o mesmo hash) | `DeleteMessage` + `wager_duplicates_total{channel="sqs",layer="inbox"}` |
 | Inválida ou conflito (erro de entrada) | Envio explícito para a DLQ (§4.4), depois `DeleteMessage` |
+| Não autorizada: `UNAUTHENTICATED`, `FORBIDDEN` ou `PROVIDER_MISMATCH` (D-23) | Envio explícito para a DLQ (§4.4), depois `DeleteMessage`. Nada é gravado, nem a inbox |
 | Transitória | `ChangeMessageVisibility(backoff)`, sem remover |
+| Chaves do IdP indisponíveis (D-23) | Transitória. O ping da pausa por saúde passa (o banco está no ar), então os pollers não pausam |
 | `DeleteMessage` falhou após o commit | Só log e métrica. A reentrega cai na inbox como duplicata |
 
 ### 4.3 Pausa por saúde
@@ -200,7 +214,7 @@ Uma falha do SQS (`ReceiveMessage` com erro) faz o poller tentar de novo com bac
 | Origem | Como chega | Atributos |
 | --- | --- | --- |
 | Tentativas esgotadas (transitória persistente) | Redrive automática do SQS após `maxReceiveCount` | Os originais |
-| Erro permanente: entrada inválida ([`transaction-lifecycle.md`](transaction-lifecycle.md) §5.3–§5.4), conflito de idempotência, `UNKNOWN_WALLET`, falha permanente de infraestrutura (`INTERNAL_PERMANENT_FAILURE`, com `FAILED` gravado no banco) ou falha permanente sem registro possível (`INTERNAL_ERROR`: a operação já gravada com a mesma chave não pode ser lida) | `SendMessage` explícito para a DLQ, depois `DeleteMessage` | `errorCode`, `errorCategory`, `originalMessageId` (id SQS), `consumerName`, `failedAt` |
+| Erro permanente: autorização recusada (`UNAUTHENTICATED`, `FORBIDDEN`, `PROVIDER_MISMATCH`; D-23), entrada inválida ([`transaction-lifecycle.md`](transaction-lifecycle.md) §5.3–§5.4), conflito de idempotência, `UNKNOWN_WALLET`, falha permanente de infraestrutura (`INTERNAL_PERMANENT_FAILURE`, com `FAILED` gravado no banco) ou falha permanente sem registro possível (`INTERNAL_ERROR`: a operação já gravada com a mesma chave não pode ser lida) | `SendMessage` explícito para a DLQ, depois `DeleteMessage` | `errorCode`, `errorCategory`, `originalMessageId` (id SQS), `consumerName`, `failedAt` |
 
 - **Envio explícito:** usa o `MessageGroupId` original (ou `invalid-messages` se não houver) e `MessageDeduplicationId = <id SQS original>`. Um crash entre o envio e o `DeleteMessage` produz no máximo uma cópia a mais na DLQ, e o FIFO deduplica dentro de 5 min.
 - **Se o envio para a DLQ falhar:** a mensagem **não** é removida e o caso é tratado como transitório.
@@ -210,7 +224,8 @@ Uma falha do SQS (`ReceiveMessage` com erro) faz o poller tentar de novo com bac
 - **Reprocessamento** ([`README.md`](../README.md) §5, D-12):
   - na AWS, `aws sqs start-message-move-task` devolve a mensagem da DLQ para a fila principal;
   - o MiniStack 1.5.18 não implementa essa ação (responde `InvalidAction`, verificado no M10). Localmente, o produtor reenvia a mesma mensagem, com o mesmo `messageId`, depois de corrigir a causa;
-  - em qualquer caso, a mensagem reprocessada cai na inbox ou na idempotência normalmente.
+  - em qualquer caso, a mensagem reprocessada cai na inbox ou na idempotência normalmente;
+  - **o token** (D-23): a cópia explícita na DLQ não leva o `accessToken`. A mensagem da redrive leva o original, que só é aceito se ainda era válido no `SentTimestamp` da mensagem devolvida. Por isso o reprocessamento previsto é o reenvio pelo produtor, com um token novo.
 
 ### 4.5 Shutdown (SQS-09)
 
@@ -390,4 +405,4 @@ Emitido **uma vez**, quando a operação entra em `PENDING_REFERENCE`. As novas 
 | `reference_retries_total` | counter | — (tentativas reagendadas) |
 | `reference_expired_total` | counter | — (rejeições por `REFERENCE_NOT_FOUND`) |
 
-No M7, o `app` passa a contar `wager_duplicates_total{channel="http"}` (o consumidor continua contando `channel="sqs"`, então nada é contado em dobro), `wager_transactions_total`, `wager_processing_duration_seconds`, `concurrency_conflicts_total` e `reconciliation_runs_total`; o `httpapi` conta `http_requests_total`, `http_request_duration_seconds` e `auth_failures_total`. O catálogo completo está no [`ARCHITECTURE.md`](../ARCHITECTURE.md) §13.2.
+No M7, o `app` passa a contar `wager_duplicates_total{channel="http"}` (o consumidor continua contando `channel="sqs"`, então nada é contado em dobro), `wager_transactions_total`, `wager_processing_duration_seconds`, `concurrency_conflicts_total` e `reconciliation_runs_total`; o `httpapi` conta `http_requests_total`, `http_request_duration_seconds` e `auth_failures_total`. Desde a D-23, o consumidor também conta `auth_failures_total{reason}`, com os mesmos valores do HTTP; o canal aparece em `sqs_dlq_sent_total{reason}`. O catálogo completo está no [`ARCHITECTURE.md`](../ARCHITECTURE.md) §13.2.

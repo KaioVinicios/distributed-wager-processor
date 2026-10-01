@@ -87,9 +87,9 @@ A ordem é fixa, para que o `failureCode` seja **determinístico**: a mesma entr
 6. Política de valor por tipo: zero só em `LOSS`, e `LOSS` só com zero.
 7. Política de referência por tipo: obrigatória, opcional ou proibida. A autorreferência (`reference == externalTransactionId`) é rejeitada.
 
-### 3.2 Autorização (HTTP)
+### 3.2 Autorização (HTTP e SQS)
 
-8. `body.providerId == token.provider_id`, ou 403 `PROVIDER_MISMATCH` (D-07).
+8. `body.providerId == token.provider_id`, ou 403 `PROVIDER_MISMATCH` (D-07). No SQS, o token vem do atributo `accessToken`, autenticado antes da leitura do envelope, e a divergência leva à DLQ com `PROVIDER_MISMATCH` (D-23, §6.2).
 
 ### 3.3 Idempotência (D-08)
 
@@ -215,7 +215,7 @@ A transação é gravada como `FAILED` em uma transação SQL **separada**, sem 
 | `UNSUPPORTED_MESSAGE_TYPE` | CORRECTABLE | `type` diferente de `WagerTransactionRequested` |
 | `MESSAGE_HASH_MISMATCH` | CORRECTABLE | O mesmo `messageId` já foi tratado com conteúdo diferente |
 
-Os demais motivos de DLQ reutilizam os códigos de §5.2 e §5.3, por exemplo `INVALID_AMOUNT`, `OPENING_NOT_ALLOWED`, `UNKNOWN_WALLET`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL_PERMANENT_FAILURE` e `INTERNAL_ERROR` (falha permanente sem registro possível, o equivalente ao 500 `INTERNAL_ERROR` do HTTP).
+Os demais motivos de DLQ reutilizam os códigos de §5.2 e §5.3, por exemplo `UNAUTHENTICATED`, `FORBIDDEN` e `PROVIDER_MISMATCH` (autorização da mensagem, D-23: token ausente, inválido ou expirado no envio, sem a role `provider`, ou `data.providerId` de outro provedor), `INVALID_AMOUNT`, `OPENING_NOT_ALLOWED`, `UNKNOWN_WALLET`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL_PERMANENT_FAILURE` e `INTERNAL_ERROR` (falha permanente sem registro possível, o equivalente ao 500 `INTERNAL_ERROR` do HTTP).
 
 Os códigos são **estáveis**: fazem parte do contrato, e renomear um código conta como quebra de contrato.
 
@@ -253,7 +253,12 @@ A falha permanente é gravada como `FAILED` quando acontece depois do lock da ca
 ### 6.2 SQS — `wager-transactions.fifo`
 
 ```
-receber → parsear o envelope (inválido → DLQ)
+receber → autenticar o accessToken no SentTimestamp (D-23):
+     ausente, inválido ou expirado no envio → DLQ (UNAUTHENTICATED)
+     chaves do IdP indisponíveis            → transitória (backoff, sem DLQ)
+     sem a role provider                    → DLQ (FORBIDDEN)
+→ parsear o envelope (inválido → DLQ)
+→ data.providerId presente e ≠ token.provider_id → DLQ (PROVIDER_MISMATCH)
 → calcular messageHash
 → buscar inbox (consumerName, messageId):
      mesmo hash      → DeleteMessage (duplicata; métrica)
@@ -270,6 +275,7 @@ receber → parsear o envelope (inválido → DLQ)
 | --- | --- |
 | `PROCESSED`, `REJECTED`, `PENDING_REFERENCE`, replay | `DeleteMessage` **depois** do commit |
 | Duplicata (inbox com o mesmo hash) | `DeleteMessage` |
+| Não autorizada (`UNAUTHENTICATED`, `FORBIDDEN`, `PROVIDER_MISMATCH`; D-23) | `SendMessage` para a DLQ com o atributo `errorCode`, seguido de `DeleteMessage`. Nada é gravado, nem a inbox |
 | Inválida, hash divergente, conflito de idempotência, `UNKNOWN_WALLET` | `SendMessage` para a DLQ com o atributo `errorCode`, seguido de `DeleteMessage` |
 | `FAILED` persistido (com a inbox, em transação separada) | Envio explícito para a DLQ (`INTERNAL_PERMANENT_FAILURE`), seguido de `DeleteMessage` |
 | Transitória | Nada é removido. `ChangeMessageVisibility` com backoff; após `maxReceiveCount = 10`, a redrive leva à DLQ. Numa queda geral do banco, os pollers pausam (`messaging.md` §4.3) |
@@ -334,7 +340,7 @@ Os contratos dos eventos (envelope, payloads e roteamento) ficam em `messaging.m
 
 | Classe | Exemplos | HTTP | SQS | Worker de referências / outbox |
 | --- | --- | --- | --- | --- |
-| **Transitória** | Erro de conexão ou rede, `context.DeadlineExceeded`, SQLSTATE `08*`, `40001`, `40P01`, `55P03`, `57P01`, `53300`, throttling ou 5xx do SQS/SNS | 503 + `Retry-After`, sem persistir | Não remove a mensagem; `ChangeMessageVisibility` com backoff | Rollback; o item volta na próxima varredura |
+| **Transitória** | Erro de conexão ou rede, `context.DeadlineExceeded`, SQLSTATE `08*`, `40001`, `40P01`, `55P03`, `57P01`, `53300`, throttling ou 5xx do SQS/SNS; no SQS, também as chaves do IdP indisponíveis ao validar o `accessToken` (`auth.ErrKeysUnavailable`, D-23) | 503 + `Retry-After`, sem persistir (com o IdP fora, o HTTP continua respondendo 401) | Não remove a mensagem; `ChangeMessageVisibility` com backoff | Rollback; o item volta na próxima varredura |
 | **Permanente** | `PDA01`–`PDA05`, `23xxx` imprevisto, `22003` (overflow), falha de reidratação | 500 + `FAILED` persistido | `FAILED` + inbox persistidos, envio à DLQ e `DeleteMessage` | `FAILED` persistido |
 | **Negócio** | §5.1 | 422 | `DeleteMessage` | `REJECTED` |
 | **Entrada** | §5.3 (400/409) | 4xx | DLQ + `DeleteMessage` | — |

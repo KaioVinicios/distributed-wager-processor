@@ -103,7 +103,8 @@ pda/
 │   │   └── *_integration_test.go           # casos de uso contra o PostgreSQL real, sem fakes (I20–I22, I03b)
 │   │
 │   ├── auth/
-│   │   ├── verifier.go                     # go-oidc: issuer, JWKS URL separada, aud, RS256
+│   │   ├── verifier.go                     # go-oidc: issuer, JWKS URL separada, aud, RS256; AuthenticateAt (D-23)
+│   │   ├── keyset.go                       # observedKeySet: falha de busca do JWKS → ErrKeysUnavailable (D-23)
 │   │   ├── principal.go                    # Principal{Subject, ProviderID, Roles} + contexto
 │   │   ├── policy.go                       # matriz de permissões (D-07)
 │   │   ├── module.go
@@ -146,6 +147,7 @@ pda/
 │   │   ├── sqsconsumer/
 │   │   │   ├── consumer.go                 # lifecycle, pollers, semáforo, shutdown em 5 passos
 │   │   │   ├── batch.go                    # agrupamento por MessageGroupId
+│   │   │   ├── authorize.go                # accessToken no SentTimestamp, role e provedor do corpo (D-23)
 │   │   │   ├── envelope.go                 # WagerTransactionRequested → wagering.Command
 │   │   │   ├── handler.go                  # inbox → caso de uso → ação na mensagem
 │   │   │   ├── dlq.go                      # envio explícito para a DLQ
@@ -344,7 +346,7 @@ flowchart TD
   - o HTTP é o último a iniciar, então só aceita tráfego com tudo pronto, e o primeiro a parar;
   - em seguida param o consumidor, o publisher e o worker de referências;
   - o pool do PostgreSQL e os clientes AWS fecham depois de todos os componentes que os usam (FX-04, FX-05).
-- **Papéis habilitáveis (M7):** `bootstrap.Options()` lê `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED` (`config.RolesFromEnv`) e chama `bootstrap.OptionsFor(config.Roles)`, que só inclui os módulos `httpapi` (com o `auth`), `sqsconsumer`, `outbox` e `references` dos papéis ligados (D-15). O admin e a `observability` ficam sempre.
+- **Papéis habilitáveis (M7):** `bootstrap.Options()` lê `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED` (`config.RolesFromEnv`) e chama `bootstrap.OptionsFor(config.Roles)`, que só inclui os módulos `httpapi`, `sqsconsumer`, `outbox` e `references` dos papéis ligados (D-15); o `auth` entra com o `httpapi` ou com o `sqsconsumer` (D-23). O admin e a `observability` ficam sempre.
 - **`fx.Invoke`:** força a instanciação dos componentes com lifecycle (servidor, consumidor, publisher, worker), que de outra forma não seriam construídos por falta de dependentes.
 
 ---

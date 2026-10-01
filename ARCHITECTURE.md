@@ -231,6 +231,9 @@ Detalhes: [`docs/decisions.md`](docs/decisions.md) D-10 e catálogo de códigos 
 
 - **Filas:** `wager-transactions.fifo`, com redrive para `wager-transactions-dlq.fifo` após **10** recebimentos. O provisionamento é automático e idempotente.
 - **`MessageGroupId = walletId`**: ordem dentro da carteira e paralelismo entre carteiras. **`MessageDeduplicationId = messageId`**: apenas uma otimização, porque a garantia vem da inbox e da idempotência.
+- **Identidade do provedor (D-23):** a mensagem carrega o token do provedor no atributo `accessToken`. O consumidor o valida como no HTTP, mas com a validade avaliada no `SentTimestamp` gravado pelo broker, então uma reentrega depois do `exp` continua válida. Em seguida exige a role `provider` e que o `data.providerId` seja o `provider_id` do token.
+  - Isso acontece antes de qualquer leitura: sem token, com um token inválido ou de outro provedor, a mensagem vai para a DLQ com `UNAUTHENTICATED`, `FORBIDDEN` ou `PROVIDER_MISMATCH`, sem nada gravado.
+  - Chaves do IdP indisponíveis são uma falha transitória.
 - **Caso de uso:** `app.ConsumeWager` consulta a inbox, valida o `data` com as mesmas regras do HTTP e chama o mesmo `ProcessWager`, que grava a inbox em todo caminho de conclusão (resultado novo, replay e `FAILED`). O adaptador `sqsconsumer` só faz o transporte: decodifica o envelope, calcula o hash e decide a ação na fila pelo resultado.
 - **Inbox:** `UNIQUE (consumer_name, message_id)` e hash do conteúdo, gravados **na mesma transação** do domínio, do ledger e da outbox. Na reentrega de uma mensagem já tratada, a mensagem é removida sem efeito. O mesmo `messageId` com conteúdo diferente vai para a DLQ. Dois consumidores com a mesma mensagem disputam a PK da inbox: o perdedor desfaz e recomeça pela consulta à inbox.
 - **Remoção só depois do commit.** Rejeições de negócio, pendências de referência e replays também são concluídos e removidos. Um crash entre o commit e a remoção resulta em reentrega, que a inbox absorve.
@@ -311,7 +314,10 @@ Detalhes: [`docs/messaging.md`](docs/messaging.md) e [`docs/decisions.md`](docs/
 - **Sem efeito nem vazamento:**
   - A autorização roda **antes** de qualquer leitura ou escrita, e a busca de idempotência usa o provedor do token. Um provedor não consegue fazer replay da operação de outro.
   - O 403 por divergência de provedor não depende da existência do recurso, e o 404 por id opaco não revela se o recurso existe. Os dois caminhos evitam enumeração.
-- **Mensageria:** o acesso às filas e ao tópico é controlado por credenciais e **políticas IAM avaliadas pelo broker**: MiniStack com `AUTH=true`, um usuário IAM por principal e políticas de identidade de menor privilégio. Os provedores podem só enviar; o serviço pode consumir, publicar e enviar para a DLQ. O teste I04f prova as negações. O consumidor aplica **todas** as validações de domínio sem confiar na origem (ver limitações).
+- **Mensageria:**
+  - **quem pode enviar** é decidido pelas credenciais e **políticas IAM avaliadas pelo broker**: MiniStack com `AUTH=true`, um usuário IAM por principal e políticas de identidade de menor privilégio. Os provedores podem só enviar; o serviço pode consumir, publicar e enviar para a DLQ. O teste I04f prova as negações;
+  - **quem é o provedor** vem do mesmo IdP do HTTP: a mensagem carrega o token do provedor (atributo `accessToken`), e o `data.providerId` precisa ser o `provider_id` do token, senão a mensagem vai para a DLQ sem efeito (D-23, testes A05 e A06);
+  - o consumidor também aplica todas as validações de domínio do HTTP.
 
 Detalhes: [`docs/decisions.md`](docs/decisions.md) D-07 e [`docs/messaging.md`](docs/messaging.md) §2.1.
 
@@ -330,7 +336,7 @@ Detalhes: [`docs/decisions.md`](docs/decisions.md) D-07 e [`docs/messaging.md`](
   Qualquer falha impede o start com um erro claro. Os servidores HTTP (API e admin) fazem o `Listen` de forma síncrona no `OnStart` (`observability.ServeOnLifecycle`): uma porta ocupada também impede o start, em vez de falhar silenciosamente numa goroutine.
 - **Health checks por composição:** cada adaptador contribui um *checker* por *value group* do Fx (`group:"health_checkers"`), e o `observability` só os agrega. Assim o pacote de observabilidade não depende de `pgx` nem do SDK AWS.
 - **Workers observáveis:** cada worker recebe um `context` cancelável e um `WaitGroup`, com prazos por item e logs de início e fim. O `OnStop` cancela e espera até o prazo.
-- **Papéis por ambiente:** `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED`. Os módulos desligados nem são incluídos no grafo.
+- **Papéis por ambiente:** `HTTP_ENABLED`, `CONSUMER_ENABLED`, `OUTBOX_PUBLISHER_ENABLED` e `REFERENCE_WORKER_ENABLED`. Os módulos desligados nem são incluídos no grafo. O `auth` entra com o HTTP **ou** com o consumidor (D-23), então uma instância só consumidora também busca o JWKS no start.
 - **Servidor que para sozinho:** se o servidor da API ou o admin para de servir por conta própria, o `ServeOnLifecycle` registra o erro e pede ao Fx o encerramento com código 1 (`fx.Shutdowner`). O stop ordenado acontece como num `SIGTERM`, e o compose reinicia a réplica (`restart: on-failure`). Assim, uma réplica nunca fica de pé sem a API.
 - **Verificação:** testes de `fx.ValidateApp`, de start/stop com tráfego real e de ausência de goroutines vazadas (`goleak`).
 
@@ -392,7 +398,7 @@ As métricas Prometheus ficam em `/metrics`, em uma porta administrativa separad
 | `outbox_published_total` / `outbox_publish_failures_total` / `outbox_lease_reclaims_total` | counter | `event_type` / — | Publicação, retries e recuperação |
 | `reconciliation_runs_total` | counter | `consistent` | Reconciliações |
 | `reconciliation_divergences_total` | counter | — | Divergências de reconciliação |
-| `auth_failures_total` | counter | `reason` (`unauthenticated`, `forbidden`, `provider_mismatch`) | Diagnóstico de acesso |
+| `auth_failures_total` | counter | `reason` (`unauthenticated`, `forbidden`, `provider_mismatch`) | Diagnóstico de acesso: requisições HTTP recusadas e mensagens SQS recusadas (D-23; o canal aparece em `sqs_dlq_sent_total{reason}`) |
 | `http_requests_total` / `http_request_duration_seconds` | counter / histogram | `route` (padrão da rota ou `unmatched`), `method`, `status` | Tráfego HTTP |
 
 O catálogo está completo desde o M7. Os gauges da outbox e o de referências são atualizados pelos próprios workers, no máximo 1×/s. `version_mismatch` não existe: o controle é pessimista (§4) e nenhum caminho produziria a label. Uma operação que passa por `PENDING_REFERENCE` aparece duas vezes em `wager_transactions_total`: com `pending_reference` no canal de entrada e com o desfecho no canal `worker`.
@@ -470,7 +476,7 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 13. **Formato monetário estrito, sem normalização**, e moedas limitadas a BRL, USD e EUR (2 casas).
 14. **A reconciliação sempre responde 200.** A divergência é sinalizada por `consistent: false`, log e métrica.
 15. **`FAILED` só para falha permanente fora das regras de negócio**, registrada em uma transação separada, sem efeito financeiro. No SQS, a mensagem correspondente também vai para a DLQ, que o desafio exige para erros permanentes.
-16. **Mensagens SQS não carregam token.** A autorização do canal é do broker (§10.3).
+16. **Mensagens SQS carregam o token do provedor** no atributo `accessToken`, validado como no HTTP, mas no instante do envio (`SentTimestamp`). O broker controla quem pode enviar, e o IdP diz quem é o provedor (§10.3, D-23).
 17. **"Caracteres imprimíveis" da `Idempotency-Key`** foi lido como ASCII visível (`0x21`–`0x7E`): sem espaço e sem caracteres não ASCII.
 18. **Erro não classificado é transitório** (D-05). Diante de um erro desconhecido, responder 503 e permitir o reenvio é preferível a gravar um `FAILED` definitivo, que consumiria o `externalTransactionId`.
 
@@ -484,7 +490,12 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
    - Em produção, as credenciais viriam de roles IAM (IRSA ou task role), sem chaves estáticas.
    - As chaves IAM do emulador são aleatórias e vivem só na memória do MiniStack. Se ele for recriado, o `aws-init` gera chaves novas e as réplicas precisam ser reiniciadas (`docker compose restart app-1 app-2 app-3`), porque o SDK lê o arquivo de credenciais no start. Reexecutar o `aws-init` com o MiniStack no ar reaproveita as chaves.
    - *Por que MiniStack:* a imagem atual do LocalStack exige conta e token, o que impediria reproduzir a solução a partir de um checkout limpo.
-2. **O `providerId` no SQS não está vinculado a um principal autenticado.** Uma única fila recebe todos os provedores. Em produção, cada provedor teria sua fila ou principal IAM, e o `providerId` seria derivado da origem.
+2. **Identidade do provedor no SQS (D-23).** O `providerId` é o do token do IdP anexado à mensagem. Restam estes limites:
+   - a DLQ por redrive guarda a mensagem original, com o token, que vale no máximo 5 min;
+   - uma queda do IdP maior que o orçamento de tentativas (~18 min) leva a mensagem à DLQ pela redrive, e ela é reprocessada pelo reenvio do produtor, com um token novo;
+   - o `messageId` é global entre provedores, porque o desafio exige a unicidade de `(consumerName, messageId)`. Um provedor que reutilize o `messageId` de outro faz a mensagem do outro ir para a DLQ com `MESSAGE_HASH_MISMATCH`, sem efeito financeiro;
+   - com o IdP fora e uma chave ainda não buscada, o HTTP continua respondendo 401, e não 503;
+   - o vínculo pelo `SenderId` do SQS (o principal IAM) não foi usado: o MiniStack devolve o id da conta, não o do usuário.
 3. **A ordem dos eventos por carteira não é estrita** com vários publishers. Os consumidores ordenam pelo `walletVersion` e deduplicam pelo `eventId`.
 4. **O envio explícito para a DLQ seguido de remoção não é atômico.** Um crash entre os dois passos pode deixar uma cópia a mais na DLQ, que a deduplicação FIFO reduz.
    - **Long poll órfão no shutdown:** um long polling cancelado pelo cliente continua aberto no broker até o fim do seu wait e pode esconder, por um visibility timeout, uma mensagem liberada nesse intervalo. Não há perda nem duplicidade, só atraso, mas a entrega ao órfão conta como um recebimento para a DLQ (verificado no MiniStack, [`docs/messaging.md`](docs/messaging.md) §4.5).
@@ -509,7 +520,7 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 
 ## 17. Trabalho não concluído
 
-**Estado na entrega (30/09/2026):** os marcos M0 a M12 de [`docs/implementation-plan.md`](docs/implementation-plan.md) estão concluídos. Do M12, só o teste de carga foi feito. Isso inclui:
+**Estado na entrega (30/09/2026):** os marcos M0 a M12 de [`docs/implementation-plan.md`](docs/implementation-plan.md) estão concluídos. Do M12, só o teste de carga foi feito. Em 01/10, a auditoria final contra o desafio fechou a identidade do provedor no SQS (D-23), que até então era uma limitação. Isso inclui:
 - todos os requisitos obrigatórios e os critérios eliminatórios E1–E10;
 - os testes unitários, de integração, de múltiplas instâncias (C01–C12) e de resiliência (R01–R04);
 - os três níveis rodando no CI.

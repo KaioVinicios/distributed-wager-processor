@@ -30,6 +30,7 @@ Decisões técnicas e interpretações do [`CHALLENGE.md`](../CHALLENGE.md) adot
 | D-20 | Documentação da API | OpenAPI 3.0.3 *design-first* em `api/openapi.yaml`, Swagger UI em `/docs`, contrato validado nos testes (kin-openapi) | 🗳️ |
 | D-21 | Teste de carga | k6 2.3.0 em Docker (profile `load` do compose), modelo aberto com taxa fixa, consistência como portão; OpenTelemetry fora (o dashboard entrou depois, na D-22) | 🗳️ |
 | D-22 | Dashboard | Prometheus 3.15 + Grafana 13.2 no compose, só configuração (sem Go novo); dashboard provisionado por arquivo; `max` nos gauges compartilhados; *start timestamps* para não perder o primeiro incremento | 🗳️ |
+| D-23 | Identidade do provedor no SQS | Token do Keycloak no atributo `accessToken`, validado como no HTTP no instante do `SentTimestamp`; `data.providerId` = `provider_id` do token, senão DLQ sem efeito; IdP indisponível é transitório | 🗳️ |
 
 ---
 
@@ -70,7 +71,7 @@ As versões fixadas, as imagens, as ferramentas de lint e formatação e a confo
    - O `aws-init` gera as chaves (`CreateAccessKey`, que no emulador é sempre aleatória) e grava o arquivo `.local/aws/credentials`, em formato INI, com um profile por usuário. O diretório é um bind mount ignorado pelo git.
    - A aplicação lê as chaves pelo mecanismo nativo do SDK: `AWS_SHARED_CREDENTIALS_FILE` + `AWS_PROFILE=pda-wallet-service`.
 3. **Políticas versionadas e testadas.** Os documentos ficam em `deploy/aws/policies/`, são aplicados pelo `init.sh` e são reutilizados pelo teste I04f. Esse teste prova as negações: provedor não consome, serviço não envia na fila de entrada, ninguém fora da lista publica no tópico.
-4. **Sem confiar na origem.** O consumidor aplica todas as validações de domínio.
+4. **Sem confiar na origem.** O consumidor aplica todas as validações de domínio. Desde 01/10, a identidade do provedor também não vem da origem: vem do token do IdP anexado à mensagem (D-23).
 
 **Limitações que continuam** (documentadas no `ARCHITECTURE.md` §16):
 - O emulador **não verifica a assinatura SigV4**: o principal é identificado só pelo access key id. A **autorização** é real; a autenticação no broker é fraca localmente.
@@ -236,10 +237,10 @@ Um segundo realm, `other`, com um client de teste, fornece tokens com `iss` e ch
 - A autorização roda **antes** de qualquer leitura ou escrita.
 - A busca de idempotência usa o `provider_id` do token.
 - A role `provider` só vale com a claim `provider_id` preenchida. Um token de provedor sem a claim recebe 403 `FORBIDDEN`, nunca um "provedor vazio".
-- O `app` não conhece o `auth`: a comparação do provedor e a visibilidade das consultas ficam na borda HTTP, antes de chamar o caso de uso.
+- O `app` não conhece o `auth`: a comparação do provedor e a visibilidade das consultas ficam nas bordas (HTTP e, desde a D-23, o consumidor SQS), antes de chamar o caso de uso.
 - O 403 por divergência de provedor não depende da existência do recurso, e o 404 por id opaco não revela se ele existe. Os dois caminhos evitam enumeração.
 
-**SQS:** a mensagem não carrega token. A confiança vem das credenciais e políticas do broker (D-02), e o consumidor aplica as mesmas validações de domínio do HTTP. **Limitação documentada:** em produção, cada provedor teria sua própria fila ou principal IAM, e o `providerId` seria derivado da origem da mensagem.
+**SQS:** o broker controla quem acessa a fila (D-02), e a identidade do provedor vem do mesmo IdP: a mensagem carrega o token do provedor no atributo `accessToken`, validado como no HTTP, e o `data.providerId` precisa ser o `provider_id` do token (D-23, que substituiu a limitação registrada aqui até 01/10/2026).
 
 ---
 
@@ -362,6 +363,7 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
 | Falha do `DeleteMessage` após o commit (M5) | Log e `sqs_delete_errors_total`; a reentrega cai na inbox como duplicata |
 | Pausa por instância (achado da spec do M9) | Cada instância fecha a sua pausa só depois de sofrer o próprio erro transitório. Numa queda geral, a mesma mensagem pode ser recebida uma vez por instância antes de todas pausarem. Por isso o `maxReceiveCount` precisa superar com folga o número de instâncias consumidoras: 10 contra 3 réplicas no compose. Os testes usam 3, e o R01 liga o consumidor numa só instância (messaging §4.3) |
 | Reprocessamento da DLQ (M10) | Na AWS, `aws sqs start-message-move-task`. O MiniStack 1.5.18 não implementa a ação (`InvalidAction`, verificado em 30/09), e o desafio não exige ferramenta de redrive: localmente, o produtor reenvia a mesma mensagem, com o mesmo `messageId`, depois de corrigir a causa. A inbox e a idempotência tornam o reenvio seguro. Sem script próprio (decisão do autor em 30/09; README §5) |
+| Identidade do provedor (D-23, 01/10/2026) | Antes de ler o envelope, o consumidor autentica o atributo `accessToken` no instante do `SentTimestamp` e exige a role `provider`; depois, `data.providerId` igual ao `provider_id` do token. Rejeição: DLQ com `UNAUTHENTICATED`, `FORBIDDEN` ou `PROVIDER_MISMATCH`, sem nada gravado. Chaves do IdP indisponíveis: transitória |
 | Long polling no shutdown (M5, achado da validação) | O poll cancelado pelo cliente continua aberto no broker até o fim do seu wait e pode esconder, por um visibility timeout, uma mensagem liberada nesse intervalo. Sem perda nem duplicidade (messaging §4.5). O `testkit.Audit.Absent` deixou de cancelar receives no meio pelo mesmo motivo |
 
 ---
@@ -574,3 +576,33 @@ Decidida em 01/10/2026, depois do M12. O autor reabriu o dashboard cortado na D-
   - uma consulta pelo Grafana (`/api/ds/query`) e uma captura do dashboard.
 - **Custo na carga:** a execução canônica (100 req/s, compose recém-criado) com Prometheus e Grafana de pé repetiu o resultado da D-21: p50/p95/p99 de 3,5/12,3/55,9 ms, 0 iterações perdidas, outbox drenada em 2,1 s. As execuções logo depois de o Docker Desktop iniciar saíram piores, com e sem os dois serviços, e melhoraram a cada repetição. A diferença era o aquecimento da VM, não o dashboard ([`load-test.md`](load-test.md) §3).
 - **Fora:** alertas (por exemplo, sobre `sqs_dlq_depth` ou divergências), persistência do histórico do Prometheus entre `docker compose down` e o tracing (OBS-05 continua parcial; esboço no `ARCHITECTURE.md` §17).
+
+---
+
+## D-23 — Identidade do provedor no SQS 🗳️ [AUTH-04, AUTH-05, AUTH-07, AUTH-09]
+
+Decidida em 01/10/2026, depois da auditoria final. Até aqui, o `providerId` de uma mensagem SQS não estava ligado a nenhuma identidade autenticada: os dois provedores têm a mesma permissão de envio na mesma fila, e o consumidor confiava no corpo. Num compose limpo, o `provider-b`, com a própria chave IAM, enviou um `REFUND` com `providerId: provider-a` contra a `BET` do A, e o REFUND foi processado. O desafio pede que a identidade autenticada determine o provedor (§2), e o E2 elimina o acesso não autorizado a operações. O autor escolheu fechar a lacuna com o IdP já usado no HTTP. Spec: [`dev/specs/2026-10-01-sqs-provider-auth-design.md`](dev/specs/2026-10-01-sqs-provider-auth-design.md).
+
+- **Onde vai o token:** no atributo de mensagem `accessToken` (`String`), com o access token JWT do `client_credentials` do provedor, sem `Bearer`. O corpo continua o do desafio, e o atributo fica fora do `message_hash` e do `payload_hash`: reenviar a mesma mensagem com um token novo continua sendo a mesma mensagem.
+- **Validação:** a mesma do HTTP (D-07): RS256 pelo JWKS, `iss`, `aud ∋ pda-api` e role `provider` com a claim `provider_id`. A diferença é o instante: `exp` e `nbf` são avaliados no `SentTimestamp`, gravado pelo broker, com a tolerância `OIDC_CLOCK_SKEW` no `exp` e a do go-oidc (5 min) no `nbf`.
+  - Uma reentrega depois do `exp` (retry, pausa por saúde, crash do consumidor) continua válida, porque o token valia quando a mensagem entrou na fila.
+  - Sem `SentTimestamp` legível, vale o instante do recebimento (falha fechada).
+- **Ordem:**
+  1. autenticar o token e a role;
+  2. ler o envelope;
+  3. comparar `data.providerId` com o `provider_id` do token sempre que o campo vem no JSON, mesmo vazio (ausente, a validação do caso de uso o rejeita com `MISSING_FIELD`);
+  4. chamar o caso de uso.
+
+  Nenhuma consulta de inbox, de idempotência ou de domínio acontece antes da autorização. **Diferença consciente do HTTP:** lá o 400 da validação do corpo vem antes do 403; aqui, uma mensagem que nomeia outro provedor é sempre `PROVIDER_MISMATCH`, mesmo com outro campo inválido. É mais restritivo e não expõe nada, porque o SQS não tem canal de resposta.
+- **Rejeições:** `UNAUTHENTICATED`, `FORBIDDEN` e `PROVIDER_MISMATCH`, os códigos do HTTP, todos `CORRECTABLE`. A mensagem vai para a DLQ por envio explícito e é removida, sem inbox e sem escrita. Cada rejeição conta em `auth_failures_total{reason}` e `sqs_dlq_sent_total{reason}`.
+- **IdP indisponível é transitório:** o go-oidc v3.21.0 perde o tipo do erro da busca do JWKS (embrulha com `%v`). Um `KeySet` próprio registra essa falha, e o verificador devolve `auth.ErrKeysUnavailable` em vez de `ErrUnauthenticated`. No consumidor, isso vira retry com backoff, sem DLQ. O HTTP continua respondendo 401 nesse caso, como antes.
+- **Composição:** o módulo `auth` entra no grafo quando o HTTP **ou** o consumidor estão ligados, então uma instância só consumidora também falha no start sem o JWKS.
+- **Token fora do log e da cópia explícita da DLQ.** A DLQ por redrive guarda a mensagem original, com um token que expira em 5 min.
+- **Descartadas:**
+  - **`SenderId` do SQS:** o MiniStack devolve o id da conta (`000000000000`), não o do usuário IAM. Sondado em 01/10/2026, não seria testável localmente;
+  - **uma fila por provedor:** o desafio nomeia a fila;
+  - **assinatura HMAC por provedor:** exigiria um segredo novo, quando o IdP já resolve a identidade;
+  - **token no corpo:** muda o contrato do desafio e o hash.
+- **Limitações:**
+  - **`messageId` global entre provedores:** o desafio exige a unicidade de `(consumerName, messageId)`. Um provedor que reutilize o `messageId` de outro faz a mensagem do outro ir para a DLQ com `MESSAGE_HASH_MISMATCH`, sem efeito financeiro;
+  - **queda do IdP maior que o orçamento de tentativas (~18 min):** a mensagem vai para a DLQ pela redrive e é reprocessada pelo reenvio do produtor, com um token novo.

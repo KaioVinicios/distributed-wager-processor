@@ -277,7 +277,7 @@ Um erro 400 não é gravado: nada mudou no saldo nem no extrato.
 
 ### 4.7 Passo 19: a mesma operação pela fila (SQS)
 
-O provedor coloca a mensagem na fila com as próprias credenciais da AWS simulada, e alguma das 3 réplicas a processa:
+O provedor coloca a mensagem na fila com as próprias credenciais da AWS simulada e anexa o próprio token do Keycloak, como no HTTP. Alguma das 3 réplicas a processa:
 
 ```sh
 aws_as() {   # AWS CLI via Docker, como um usuário da AWS simulada
@@ -290,6 +290,7 @@ aws_as() {   # AWS CLI via Docker, como um usuário da AWS simulada
 aws_as provider-a sqs send-message \
   --queue-url http://ministack:4566/000000000000/wager-transactions.fifo \
   --message-group-id "$WALLET" --message-deduplication-id "msg-$R" \
+  --message-attributes "{\"accessToken\":{\"DataType\":\"String\",\"StringValue\":\"$(scripts/get-token.sh provider-a)\"}}" \
   --message-body "$(cat <<EOF
 {
   "messageId": "msg-$R",
@@ -317,7 +318,7 @@ curl -s localhost:8082/providers/provider-a/wagering/transactions/sqs-1-$R \
 
 **Esperado:** `{"kind":"WIN","status":"PROCESSED","receivedVia":"SQS","balance":{"amount":"75.00","currency":"BRL"}}`
 
-O `data` da mensagem é o mesmo payload do HTTP, com a chave anti-duplicação dentro dele (`idempotencyKey`) em vez de no cabeçalho.
+O `data` da mensagem é o mesmo payload do HTTP, com a chave anti-duplicação dentro dele (`idempotencyKey`) em vez de no cabeçalho. O token vai num atributo da mensagem (`accessToken`), fora do corpo. As credenciais da AWS só dizem que o provedor pode enviar; é o token que diz **qual** provedor ele é. Sem token, ou com o token de outro provedor, a mensagem vai para a fila de erros (DLQ) sem mexer em nenhum saldo.
 
 ---
 

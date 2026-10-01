@@ -230,8 +230,8 @@ aws_root sqs get-queue-attributes --attribute-names All \
 - **O MiniStack 1.5.18 não implementa essa ação** (responde `InvalidAction`). Localmente:
   1. leia a mensagem e seus atributos: `aws_root sqs receive-message --queue-url …/wager-transactions-dlq.fifo --attribute-names All --message-attribute-names All`;
   2. corrija a causa (uma mensagem inválida precisa ser corrigida pelo produtor);
-  3. peça ao produtor que **reenvie a mesma mensagem, com o mesmo `messageId`**.
-- O reenvio é seguro: a inbox e a idempotência absorvem qualquer repetição.
+  3. peça ao produtor que **reenvie a mesma mensagem, com o mesmo `messageId`** e um token novo no atributo `accessToken` (a cópia na DLQ não traz o token, D-23).
+- O reenvio é seguro: a inbox e a idempotência absorvem qualquer repetição, e o token fica fora do hash da mensagem.
 
 O contrato da mensagem de entrada (`WagerTransactionRequested`), o `MessageGroupId` (`walletId`) e o `MessageDeduplicationId` (`messageId`) estão em [`docs/messaging.md`](docs/messaging.md) §3.
 
@@ -414,11 +414,11 @@ curl -s -o /dev/null -w '%{http_code}\n' localhost:8081/wagering/transactions/$T
   -H "Authorization: Bearer $(scripts/get-token.sh provider-b)"                             # 404 TRANSACTION_NOT_FOUND
 ```
 
-Um provedor nunca vê a transação de outro: o 404 por id não revela se ela existe. Um `providerId` do corpo ou do path diferente do token responde 403.
+Um provedor nunca vê a transação de outro: o 404 por id não revela se ela existe. Um `providerId` do corpo ou do path diferente do token responde 403. Pelo SQS, a mesma regra vale com o token da mensagem (§8.8).
 
 ### 8.8 A mesma operação pelo SQS
 
-O provedor envia com as **suas** credenciais IAM, de `.local/aws/credentials`:
+O provedor envia com as **suas** credenciais IAM, de `.local/aws/credentials`, e com o **seu** token do Keycloak no atributo `accessToken`: o broker decide quem pode enviar, e o token diz quem é o provedor (D-23).
 
 ```sh
 aws_as() {   # aws_as <profile> <args…>: AWS CLI da imagem, na rede do compose, como um usuário IAM
@@ -431,6 +431,7 @@ QUEUE=http://ministack:4566/000000000000/wager-transactions.fifo
 
 aws_as provider-a sqs send-message --queue-url $QUEUE \
   --message-group-id "$WALLET" --message-deduplication-id "msg-$R" \
+  --message-attributes "{\"accessToken\":{\"DataType\":\"String\",\"StringValue\":\"$(scripts/get-token.sh provider-a)\"}}" \
   --message-body "{\"messageId\":\"msg-$R\",\"type\":\"WagerTransactionRequested\",\"occurredAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"data\":{\"providerId\":\"provider-a\",\"externalTransactionId\":\"sqs-1-$R\",\"idempotencyKey\":\"provider-a:sqs-1-$R\",\"playerId\":\"$PLAYER\",\"walletId\":\"$WALLET\",\"roundId\":\"round-1\",\"gameId\":\"fortune-chimp\",\"kind\":\"WIN\",\"money\":{\"amount\":\"5.00\",\"currency\":\"BRL\"}}}"
 
 curl -s localhost:8082/providers/provider-a/wagering/transactions/sqs-1-$R \
@@ -439,9 +440,18 @@ curl -s localhost:8082/providers/provider-a/wagering/transactions/sqs-1-$R \
 
 aws_as provider-a sqs receive-message --queue-url $QUEUE     # o provedor não pode consumir
 # … AccessDeniedException … not authorized to perform: sqs:ReceiveMessage …
+
+# o provider-b, com a própria chave e o próprio token, tenta estornar a BET do provider-a em nome dele
+aws_as provider-b sqs send-message --queue-url $QUEUE \
+  --message-group-id "$WALLET" --message-deduplication-id "spoof-$R" \
+  --message-attributes "{\"accessToken\":{\"DataType\":\"String\",\"StringValue\":\"$(scripts/get-token.sh provider-b)\"}}" \
+  --message-body "{\"messageId\":\"spoof-$R\",\"type\":\"WagerTransactionRequested\",\"occurredAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"data\":{\"providerId\":\"provider-a\",\"externalTransactionId\":\"spoof-$R\",\"idempotencyKey\":\"provider-a:spoof-$R\",\"playerId\":\"$PLAYER\",\"walletId\":\"$WALLET\",\"roundId\":\"round-1\",\"gameId\":\"fortune-chimp\",\"kind\":\"REFUND\",\"money\":{\"amount\":\"80.00\",\"currency\":\"BRL\"},\"referenceExternalTransactionId\":\"bet-1-$R\"}}"
+aws_root sqs receive-message --queue-url http://ministack:4566/000000000000/wager-transactions-dlq.fifo \
+  --message-attribute-names All --wait-time-seconds 5 --query 'Messages[].MessageAttributes.errorCode.StringValue'
+# [ "PROVIDER_MISMATCH" ]
 ```
 
-O SQS passa pelo mesmo caso de uso do HTTP. Reenviar a mesma operação por qualquer canal cai no replay, e o mesmo `messageId` é deduplicado pela inbox.
+O SQS passa pelo mesmo caso de uso do HTTP. Reenviar a mesma operação por qualquer canal cai no replay, e o mesmo `messageId` é deduplicado pela inbox. Uma mensagem sem token, com um token inválido ou que nomeia outro provedor vai para a DLQ (`UNAUTHENTICATED`, `FORBIDDEN` ou `PROVIDER_MISMATCH`) sem nenhum efeito, e o saldo não muda.
 
 ### 8.9 Eventos e métricas
 

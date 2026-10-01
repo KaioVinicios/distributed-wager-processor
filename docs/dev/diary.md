@@ -277,9 +277,21 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
 - **Correção:** o `Cluster` registra a última parada, e o `AwaitOrphanPolls` espera `SQS_WAIT_TIME` + 200 ms a partir dela. O `consumerOnlyOn0` (R01 e R03) chama esse método antes de devolver o controle. Depois disso, o R03 passou 40 vezes seguidas. O messaging §4.5 passou a dizer que a entrega ao órfão conta como recebimento ([spec](specs/2026-10-01-r03-orphan-poll-design.md) → [plano](plans/2026-10-01-r03-orphan-poll.md)).
 - **Fora do escopo:** o `LedgerProblems` lê a carteira e o ledger sem snapshot, e por isso acusou uma divergência falsa no cleanup de uma rodada que já tinha falhado.
 
+## 01/10/2026 (qui): auditoria final e identidade do provedor no SQS (D-23)
+
+- **Auditoria:** o projeto foi conferido item a item contra o `CHALLENGE.md`. Todas as suítes passaram de novo, e o compose subiu de um clone limpo com volume zerado (46 s). Nove dos dez eliminatórios estavam cobertos por código e testes.
+- **Achado:** no SQS, o `providerId` não estava ligado a nenhuma identidade autenticada. Era uma limitação registrada, mas não fechada. Num compose limpo, o `provider-b`, com a própria chave IAM, enviou um REFUND com `providerId: provider-a` contra a BET do A. O REFUND foi processado e o saldo foi de 20.00 a 100.00. Isso contraria o §2 e expõe o E2 pelo canal SQS.
+- **Sondagem:** o vínculo pelo `SenderId` do SQS não funciona no MiniStack, que devolve o id da conta (`000000000000`) e não o do usuário IAM.
+- **Decisão (autor, opção A):** o token do Keycloak do provedor vai no atributo `accessToken`. Ele é validado como no HTTP, mas no `SentTimestamp` gravado pelo broker, e o `data.providerId` precisa ser o `provider_id` do token. As recusas vão para a DLQ sem efeito, e o IdP fora é uma falha transitória (D-23).
+- **Achados da implementação:**
+  - o go-oidc perde o tipo do erro da busca do JWKS (`%v` no `verify.go`), e um `KeySet` próprio registra a falha;
+  - o Fx só constrói o verificador se alguém depender dele, então o fail fast "só consumidor" só ficou verde quando o consumidor passou a exigir o autenticador;
+  - os testes do `sqsconsumer` usam um provedor aleatório por teste, então ali o token é lido como o id do provedor (`trustingAuth`), e o IdP real fica no A06 e nos testes de `test/integration` e e2e.
+- **Evidência:** A05 reproduz a auditoria (vermelho antes, verde depois; sem a comparação do provedor, volta a falhar), A06 com o Keycloak real, U33–U35, I14 com um token próprio no SQS. Spec: [specs/2026-10-01-sqs-provider-auth-design.md](specs/2026-10-01-sqs-provider-auth-design.md); plano: [plans/2026-10-01-sqs-provider-auth.md](plans/2026-10-01-sqs-provider-auth.md).
+
 ## Onde paramos
 
-- **M12 concluído (commits aguardando autorização).** Todos os marcos M0–M12 estão fechados. Do M12, só o teste de carga foi feito, e o OpenTelemetry e o dashboard foram cortados (D-21). O dashboard entrou em 01/10 (D-22, commits aguardando autorização). As execuções do M12 recriaram o compose com `down -v`, então o banco de desenvolvimento só tem os dados da última execução de carga.
+- **M12 concluído; D-23 (identidade do provedor no SQS) em 01/10 (commits aguardando autorização).** Todos os marcos M0–M12 estão fechados. Do M12, só o teste de carga foi feito, e o OpenTelemetry e o dashboard foram cortados (D-21). O dashboard entrou em 01/10 (D-22, commits aguardando autorização). As execuções do M12 recriaram o compose com `down -v`, então o banco de desenvolvimento só tem os dados da última execução de carga.
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - **os 3 minors do M0: resolvidos em 30/09** ([spec](specs/2026-09-30-m0-minors-design.md));
