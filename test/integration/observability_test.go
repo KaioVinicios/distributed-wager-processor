@@ -31,7 +31,8 @@ func logLines(t *testing.T, marker string) []map[string]any {
 }
 
 // Covers: OBS-01, OBS-02 (I14)
-// Sensitivity: logging the Authorization header in logAccess → the token check fails; logging the amount in "wager concluded" → the amount check fails.
+// Sensitivity: logging the Authorization header in logAccess → the token check fails; logging the amount in "wager concluded" → the amount check fails;
+// logging the accessToken in the SQS consumer → the sqsToken check fails (D-23).
 func TestLogsHaveIdsWithoutSecrets(t *testing.T) {
 	t.Parallel()
 	const amount = "4242.42"
@@ -72,7 +73,9 @@ func TestLogsHaveIdsWithoutSecrets(t *testing.T) {
 	})
 	// SQS: another BET, with the envelope messageId.
 	msgID, sqsExt := unique("msg"), unique("sqsbet")
-	server.SendWager(t, sqsWager(t, msgID, wager(w, provider, "BET", "12.34", sqsExt, "")), testkit.SendOpts{GroupID: w.ID, CorrelationID: corr})
+	sqsToken := testkit.FreshToken(t, "provider-a") // a marker of its own: the HTTP token is another
+	server.SendWager(t, sqsWager(t, msgID, wager(w, provider, "BET", "12.34", sqsExt, "")),
+		testkit.SendOpts{GroupID: w.ID, CorrelationID: corr, Token: sqsToken})
 	testkit.Eventually(t, 15*time.Second, "the SQS BET is concluded", func(context.Context) (bool, error) {
 		return len(logLines(t, msgID)) > 0, nil
 	})
@@ -80,7 +83,7 @@ func TestLogsHaveIdsWithoutSecrets(t *testing.T) {
 
 	logs := server.Logs()
 	// Markers unique to this test: no line of the whole app log may carry them.
-	for _, secret := range []string{token, "Bearer ", amount, key} {
+	for _, secret := range []string{token, sqsToken, "Bearer ", amount, key} {
 		if strings.Contains(logs, secret) {
 			t.Fatalf("the log leaks %q", secret)
 		}
