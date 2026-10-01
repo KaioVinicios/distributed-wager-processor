@@ -362,4 +362,12 @@ Os itens que ficarem de fora entram na seção de limitações.
 
 ## 9. Opcional — teste de carga ⭐
 
-Se sobrar tempo: um cenário com `vegeta` ou `k6`, 3 instâncias, 1.000 carteiras, 60 s, mistura de 70% BET, 25% WIN e 5% REFUND. Deve registrar ambiente, throughput, p50/p95/p99, erros, conflitos (`concurrency_conflicts_total`) e atraso da outbox (`outbox_publish_lag_seconds`). O comando e o relatório ficam em `docs/load-test.md`.
+Um cenário com k6, 3 instâncias, 1.000 carteiras, 60 s e a mistura de 70% BET, 25% WIN e 5% REFUND. O relatório registra ambiente, throughput, p50/p95/p99, erros, conflitos (`concurrency_conflicts_total`) e atraso da outbox (`outbox_publish_lag_seconds`). O comando e o relatório ficam em `docs/load-test.md`.
+
+**Metodologia** (D-21, M12):
+- `make load-test` roda o serviço `k6` do compose (profile `load`) contra as réplicas `app-1..3` de pé. Os parâmetros são `RATE` (200 req/s), `DURATION` (60 s) e `WALLETS` (1.000);
+- **modelo aberto** (`constant-arrival-rate`), com uma requisição por iteração e réplicas em rodízio;
+- cada VU guarda as próprias BETs: o WIN referencia uma delas, e o REFUND compensa uma delas uma única vez. Assim, só 200 `PROCESSED` é sucesso;
+- os percentis são medidos só na janela (tag `phase:load`). Conflitos e resultados entram como deltas das métricas das 3 réplicas, e os percentis do atraso da outbox vêm do SQL (`published_at - occurred_at`);
+- **portões:** erros < 1%, outbox drenada em até 60 s depois da carga e `POST /reconciliation` com `consistent=true` em todas as carteiras;
+- o relatório traz uma tabela com 100, 200 e 400 req/s, para mostrar o ponto de saturação.

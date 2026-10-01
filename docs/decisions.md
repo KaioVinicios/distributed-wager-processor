@@ -28,6 +28,7 @@ Decisões técnicas e interpretações do [`CHALLENGE.md`](../CHALLENGE.md) adot
 | D-18 | Observabilidade | slog JSON; `/metrics` em porta administrativa separada | ⚙️ |
 | D-19 | Estratégia de testes | Build tags + infraestrutura do compose; e2e com 3 processos; injeção de falhas por build tag | 🗳️ |
 | D-20 | Documentação da API | OpenAPI 3.0.3 *design-first* em `api/openapi.yaml`, Swagger UI em `/docs`, contrato validado nos testes (kin-openapi) | 🗳️ |
+| D-21 | Teste de carga | k6 2.3.0 em Docker (profile `load` do compose), modelo aberto com taxa fixa, consistência como portão; OpenTelemetry e dashboard fora | 🗳️ |
 
 ---
 
@@ -528,3 +529,24 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
 - **Coleção:** `api/requests.http` (REST Client do VS Code / HTTP Client do JetBrains) com o fluxo completo: token → abrir carteira → BET → replay → rejeição → reconciliação.
 - **Anti-divergência:** `getkin/kin-openapi` v0.149.0, **só nos testes**. O cliente HTTP do `testkit` valida cada requisição e cada resposta de todos os testes de integração contra o `api/openapi.yaml` (`openapi3filter`), então uma resposta fora do contrato quebra o teste. As únicas exceções são as requisições que o teste marca como deliberadamente inválidas (I12, 415, limite de corpo) e as rotas fora do documento (404/405 de rota): nelas só a resposta é validada. O I15 é unitário e verifica o documento e a paridade entre as rotas do OpenAPI e a tabela de rotas do `httpapi`, que é a mesma que registra no `ServeMux`.
 - **Limitação:** o `/docs` precisa de internet no navegador por causa do CDN. Sem internet, basta importar o `/openapi.yaml` numa ferramenta de API ou usar o `api/requests.http`.
+
+---
+
+## D-21 — Teste de carga ⭐ 🗳️ [TST-L01, OBS-05]
+
+Decidida no M12 (spec [`dev/specs/2026-09-30-m12-load-test-design.md`](dev/specs/2026-09-30-m12-load-test-design.md)).
+
+- **Ferramenta:** k6 (`grafana/k6:2.3.0`) como serviço `k6` do compose, no profile `load`, rodado por `make load-test` (`scripts/load-test.sh`) contra as 3 réplicas que já estão de pé. O script fica em `test/load/wager.js`. Não há gerador em Go.
+- **Modelo aberto:** `constant-arrival-rate` com taxa fixa (`RATE`, padrão 200 req/s), por `DURATION` (60 s), sobre `WALLETS` (1.000) carteiras novas a cada execução, com as réplicas em rodízio. A latência não é mascarada pela espera do cliente, e a taxa não sustentada aparece como `dropped_iterations`.
+- **Mistura sem rejeições por acaso:** 70% BET, 25% WIN (referenciando uma BET do mesmo VU, quando houver) e 5% REFUND (de uma BET do mesmo VU ainda sem compensação). As carteiras abrem com 10.000,00. Qualquer resposta diferente de 200 `PROCESSED` é erro.
+- **Medição:**
+  - latência e throughput só da janela (tag `phase:load`);
+  - conflitos, resultados e a métrica de atraso da outbox como **deltas** somados nas 3 réplicas;
+  - percentis do atraso da outbox **exatos, por SQL** (`published_at - occurred_at`), porque os 12 buckets do histograma são grossos demais para percentis.
+- **A carga também prova correção.** O k6 sai com código diferente de zero se:
+  - a taxa de erros passar de 1%;
+  - a outbox não drenar em 60 s;
+  - alguma carteira der `consistent=false` na reconciliação feita depois da carga.
+
+  A latência é medida, não é portão.
+- **Fora:** o tracing com OpenTelemetry (OBS-05) e o dashboard. A versão mínima do tracing, sem propagação pela outbox, pelo SNS e pelo SQS, terminaria na requisição HTTP, justo onde o sistema é mais simples, e a versão útil não cabe no prazo. O esboço fica no `ARCHITECTURE.md` §17.

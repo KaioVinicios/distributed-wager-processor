@@ -204,7 +204,7 @@ pda/
 │
 ├── scripts/
 │   ├── get-token.sh                        # obtém token client_credentials (fluxos do README)
-│   └── dlq-redrive.sh                      # devolve mensagens da DLQ para a fila principal
+│   └── load-test.sh                        # make load-test: k6 do compose + atraso exato da outbox por SQL (D-21, M12)
 │
 ├── test/
 │   ├── testkit/                            # utilitários compartilhados (sem build tag)
@@ -242,7 +242,8 @@ pda/
 │   │   ├── channels_test.go                # C10a, C10b
 │   │   ├── resilience_test.go              # R01–R04: quedas do PostgreSQL e do MiniStack, shutdown com SQS e HTTP em andamento (M9)
 │   │   └── helpers_test.go                 # corpo das operações e submissão
-│   └── load/ ⭐                            # teste de carga (test-plan §9)
+│   └── load/ ⭐                            # teste de carga (test-plan §9, D-21)
+│       └── wager.js                        # script k6: abre as carteiras, carga em taxa fixa, drenagem e reconciliação
 │
 ├── docs/                                   # documentação do sistema e do projeto
 │   ├── delivery-requirements.md

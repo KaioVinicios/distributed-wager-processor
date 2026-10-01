@@ -131,6 +131,7 @@ Estes artefatos não passam por TDD, mas cada um tem uma **validação obrigató
 | Código de spike | Nunca é mantido. Se a solução for aproveitada, é reescrita com TDD |
 | Documentação | Revisão de links e execução real dos comandos do README no M11 |
 | `scripts/*.sh` (aprovado em 30/09/2026, no M11) | Execução real dos exemplos do README que usam o script (§7 e §8) |
+| `test/load/*.js` (scripts k6; aprovado em 30/09/2026, no M12) | Execução curta (`DURATION=5s RATE=20`), execução canônica de `make load-test` com saída 0 e checagem de sensibilidade de cada portão (spec do M12, §6) |
 
 Qualquer outra exceção precisa de aprovação explícita do autor.
 
