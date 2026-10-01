@@ -223,7 +223,7 @@ No `OnStop`, com prazo de `SHUTDOWN_TIMEOUT` (20 s, e `fx.StopTimeout` de 30 s):
 
 Em nenhum desses caminhos uma mensagem é removida sem commit. Um `SIGKILL` no meio do processamento equivale ao passo 4 sem a liberação: a mensagem reaparece quando o visibility timeout vence.
 
-> **Limitação (achado da validação do M5):** um long polling cancelado pelo cliente no passo 1 continua aberto no broker até o fim do seu `WaitTimeSeconds`. Uma mensagem liberada nesse intervalo pode ser entregue a esse poll órfão e ficar invisível por um visibility timeout antes de voltar à fila. Não há perda nem duplicidade, só um atraso de até um visibility timeout para essa mensagem. Os testes de shutdown usam short polling para observar a liberação em si.
+> **Limitação (achado da validação do M5):** um long polling cancelado pelo cliente no passo 1 continua aberto no broker até o fim do seu `WaitTimeSeconds`. Uma mensagem liberada nesse intervalo pode ser entregue a esse poll órfão e ficar invisível por um visibility timeout antes de voltar à fila. Não há perda nem duplicidade, só um atraso de até um visibility timeout para essa mensagem. A entrega ao poll órfão **conta como recebimento** para o `maxReceiveCount` da DLQ (10, D-12), então consome uma das tentativas da mensagem. Os testes de shutdown usam short polling para observar a liberação em si, e os testes que reiniciam consumidores esperam os polls órfãos expirarem antes de enviar (`Cluster.AwaitOrphanPolls`, achado do R03 em 01/10).
 
 ---
 

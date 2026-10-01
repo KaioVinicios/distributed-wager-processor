@@ -270,6 +270,13 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
 - **Achado 3, carga e aquecimento:** as primeiras execuções de `make load-test` depois de o Docker Desktop iniciar saíram muito piores que o registrado. Um A/B sem o Prometheus e o Grafana melhorou, mas a execução seguinte, com os dois, foi a melhor das três (p50/p95/p99 de 3,5/12,3/55,9 ms, 0 perdidas, drenagem em 2,1 s). Era o aquecimento da VM ([`load-test.md`](../load-test.md) §3).
 - **Validação:** compose saudável, 3 alvos `up`, as 42 consultas avaliadas sem erro depois da carga, a consulta pelo Grafana (`/api/ds/query`) e uma captura do dashboard no Chrome headless.
 
+## 01/10/2026 (qui): R03 intermitente
+
+- **Sintoma:** com o compose inteiro de pé, o `make test-e2e` falhou no `TestGracefulShutdownSQS` (R03), na preparação: "3 sessions waiting for the wallet lock: not reached within 5s". Foram 3 falhas em 28 rodadas.
+- **Causa:** o `consumerOnlyOn0` reinicia consumidores, e os long polls deles continuam abertos no MiniStack por até `SQS_WAIT_TIME` (2 s no e2e; messaging §4.5). O R03 enviava as mensagens dentro dessa janela, e um poll órfão podia esconder um lote por 5 s (o visibility). Uma instrumentação temporária mostrou a assinatura: 37 rodadas chegaram ao lock em até 120 ms, e 3 só depois de 5,13 a 5,96 s. Esperar mais não adiantava, porque a entrega ao órfão gasta uma das 3 tentativas da fila de teste e mandou 7 mensagens à DLQ.
+- **Correção:** o `Cluster` registra a última parada, e o `AwaitOrphanPolls` espera `SQS_WAIT_TIME` + 200 ms a partir dela. O `consumerOnlyOn0` (R01 e R03) chama esse método antes de devolver o controle. Depois disso, o R03 passou 40 vezes seguidas. O messaging §4.5 passou a dizer que a entrega ao órfão conta como recebimento ([spec](specs/2026-10-01-r03-orphan-poll-design.md) → [plano](plans/2026-10-01-r03-orphan-poll.md)).
+- **Fora do escopo:** o `LedgerProblems` lê a carteira e o ledger sem snapshot, e por isso acusou uma divergência falsa no cleanup de uma rodada que já tinha falhado.
+
 ## Onde paramos
 
 - **M12 concluído (commits aguardando autorização).** Todos os marcos M0–M12 estão fechados. Do M12, só o teste de carga foi feito, e o OpenTelemetry e o dashboard foram cortados (D-21). O dashboard entrou em 01/10 (D-22, commits aguardando autorização). As execuções do M12 recriaram o compose com `down -v`, então o banco de desenvolvimento só tem os dados da última execução de carga.
