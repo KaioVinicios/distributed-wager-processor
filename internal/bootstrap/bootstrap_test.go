@@ -99,6 +99,17 @@ func TestOptionsFor(t *testing.T) {
 		})
 	}
 
+	t.Run("the consumer without the HTTP has the verifier (D-23)", func(t *testing.T) {
+		needVerifier := fx.Invoke(func(*auth.Verifier) {})
+		if err := fx.ValidateApp(append(bootstrap.OptionsFor(config.Roles{Consumer: true}), needVerifier)...); err != nil {
+			t.Fatalf("ValidateApp() = %v, want the verifier with the consumer on", err)
+		}
+		err := fx.ValidateApp(append(bootstrap.OptionsFor(config.Roles{OutboxPublisher: true, ReferenceWorker: true}), needVerifier)...)
+		if err == nil || !strings.Contains(err.Error(), "missing type") {
+			t.Fatalf("ValidateApp() = %v, want no verifier without the HTTP and the consumer", err)
+		}
+	})
+
 	t.Run("every role off is a valid graph", func(t *testing.T) {
 		if err := fx.ValidateApp(bootstrap.OptionsFor(config.Roles{})...); err != nil {
 			t.Fatalf("ValidateApp() = %v", err)

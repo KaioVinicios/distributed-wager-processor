@@ -33,7 +33,8 @@ func Options() []fx.Option {
 // dependencies first, then the enabled workers (references, outbox, consumer),
 // HTTP last, so it starts last and stops first; the workers stop before the
 // pool and the AWS clients close. A disabled role leaves its module out of the
-// graph. The admin server and the observability module are always present.
+// graph; the auth module comes with the HTTP or with the consumer. The admin
+// server and the observability module are always present.
 func OptionsFor(roles config.Roles) []fx.Option {
 	opts := []fx.Option{
 		fx.StopTimeout(config.MaxShutdownTimeout),
@@ -44,8 +45,8 @@ func OptionsFor(roles config.Roles) []fx.Option {
 		postgres.Module,
 		awsclient.Module,
 	}
-	if roles.HTTP {
-		opts = append(opts, auth.Module)
+	if roles.HTTP || roles.Consumer {
+		opts = append(opts, auth.Module) // bearer tokens of the API and accessToken of the messages (D-23)
 	}
 	opts = append(opts, appModule)
 	if roles.ReferenceWorker {
