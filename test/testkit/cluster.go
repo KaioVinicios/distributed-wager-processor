@@ -44,6 +44,10 @@ type Cluster struct {
 	addrs [][2]string       // HTTP and admin listen address of each instance
 	procs []*proc
 
+	waitTime time.Duration // SQS_WAIT_TIME: how long a stopped consumer's long poll may outlive it
+	stopMu   sync.Mutex
+	lastStop time.Time // when an instance last stopped; read by AwaitOrphanPolls
+
 	closeOnce sync.Once
 }
 
@@ -112,6 +116,7 @@ func (e *Env) StartCluster(ctx context.Context, n int, opts ...func(*config.Conf
 		opt(&cfg)
 	}
 	cfg.HTTPAddr, cfg.MetricsAddr = c.addrs[0][0], c.addrs[0][1]
+	c.waitTime = cfg.SQSWaitTime
 	if err := cfg.Validate(); err != nil {
 		return nil, nil, errors.Join(fmt.Errorf("testkit: cluster config: %w", err), stop())
 	}
@@ -185,6 +190,36 @@ func (c *Cluster) start(ctx context.Context, i int, overrides ...map[string]stri
 	c.procs[i] = p
 	go c.watch(p)
 	return c.waitReady(ctx, i, p)
+}
+
+// stopped records that an instance just stopped (AwaitOrphanPolls).
+func (c *Cluster) stopped() {
+	c.stopMu.Lock()
+	c.lastStop = time.Now()
+	c.stopMu.Unlock()
+}
+
+// AwaitOrphanPolls waits until the long polls that the consumers stopped by
+// this cluster left open at the broker are over: a message sent before that
+// can be taken by one and hidden for a visibility timeout (messaging §4.5).
+func (c *Cluster) AwaitOrphanPolls() {
+	c.stopMu.Lock()
+	last := c.lastStop
+	c.stopMu.Unlock()
+	time.Sleep(orphanWait(last, time.Now(), c.waitTime))
+}
+
+// orphanMargin covers the local latency between the stop and the broker.
+const orphanMargin = 200 * time.Millisecond
+
+// orphanWait is how long, at now, the long polls of a consumer stopped at
+// lastStop may still be open at the broker: each ends at most waitTime after
+// it began, before the stop (messaging §4.5). Zero lastStop: no consumer stopped.
+func orphanWait(lastStop, now time.Time, waitTime time.Duration) time.Duration {
+	if lastStop.IsZero() {
+		return 0
+	}
+	return max(lastStop.Add(waitTime+orphanMargin).Sub(now), 0)
 }
 
 func envList(env map[string]string) []string {
@@ -263,9 +298,11 @@ func (c *Cluster) terminate(p *proc) error {
 	}
 	select {
 	case <-p.done:
+		c.stopped()
 	case <-time.After(stopTimeout):
 		_ = p.cmd.Process.Kill()
 		<-p.done
+		c.stopped()
 		return fmt.Errorf("not stopped within %v:\n%s", stopTimeout, p.log)
 	}
 	if p.code != 0 {

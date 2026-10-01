@@ -52,3 +52,22 @@ func TestClientTryReportsTransportError(t *testing.T) {
 		t.Fatalf("Try() = %+v, %v; want a transport error and no response", resp, err)
 	}
 }
+
+// Covers: R03 setup (spec r03-orphan-poll, decision 2)
+func TestOrphanWait(t *testing.T) {
+	stop := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name     string
+		lastStop time.Time
+		now      time.Time
+		want     time.Duration
+	}{
+		{"poll still open", stop, stop.Add(500 * time.Millisecond), 1700 * time.Millisecond},
+		{"poll already over", stop, stop.Add(3 * time.Second), 0},
+		{"no instance stopped", time.Time{}, stop, 0},
+	} {
+		if got := orphanWait(c.lastStop, c.now, 2*time.Second); got != c.want {
+			t.Errorf("%s: orphanWait = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

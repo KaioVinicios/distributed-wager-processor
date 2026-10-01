@@ -83,7 +83,9 @@ func TestSQSOutage(t *testing.T) {
 const pgOutage = 15 * time.Second
 
 // consumerOnlyOn0 leaves the SQS consumer on instance 0 alone, with extra on
-// it when not nil; instances 1 and 2 run every other role. The test defers
+// it when not nil; instances 1 and 2 run every other role. It returns once
+// the long polls of the consumers it stopped are over, so no message the test
+// sends next is hidden by one (spec r03-orphan-poll). The test defers
 // cluster.Restore.
 func consumerOnlyOn0(t *testing.T, extra map[string]string) {
 	t.Helper()
@@ -93,6 +95,7 @@ func consumerOnlyOn0(t *testing.T, extra map[string]string) {
 	if extra != nil {
 		cluster.Restart(t, 0, extra)
 	}
+	cluster.AwaitOrphanPolls()
 }
 
 // httpCall is one BET of R01 and what came back.
