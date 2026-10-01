@@ -3,6 +3,7 @@
 package sqsconsumer_test
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -20,6 +21,7 @@ import (
 	"github.com/KaioVinicios/pda/internal/adapters/sqsconsumer"
 	"github.com/KaioVinicios/pda/internal/app"
 	"github.com/KaioVinicios/pda/internal/apperrors"
+	"github.com/KaioVinicios/pda/internal/auth"
 	"github.com/KaioVinicios/pda/internal/domain/events"
 	"github.com/KaioVinicios/pda/internal/domain/wagering"
 	"github.com/KaioVinicios/pda/internal/observability"
@@ -57,10 +59,20 @@ func options() sqsconsumer.Options {
 
 // consumerOpts customizes one consumer of a fixture.
 type consumerOpts struct {
-	proc   sqsconsumer.Processor // nil = the real use case
-	api    sqsconsumer.QueueAPI  // nil = the SQS client
-	pinger sqsconsumer.Pinger    // nil = the package database
-	opts   *sqsconsumer.Options  // nil = options()
+	proc   sqsconsumer.Processor     // nil = the real use case
+	api    sqsconsumer.QueueAPI      // nil = the SQS client
+	pinger sqsconsumer.Pinger        // nil = the package database
+	auth   sqsconsumer.Authenticator // nil = trustingAuth
+	opts   *sqsconsumer.Options      // nil = options()
+}
+
+// trustingAuth reads the token as the provider id. The tests of this package
+// use a provider per test ("provider-<id>"), which the IdP does not know; the
+// real IdP is exercised here by A06 and by every SQS test of test/integration.
+type trustingAuth struct{}
+
+func (trustingAuth) AuthenticateAt(_ context.Context, raw string, _ time.Time) (auth.Principal, error) {
+	return auth.Principal{ProviderID: raw, Roles: []auth.Role{auth.RoleProvider}}, nil
 }
 
 // start runs a consumer until the returned stop, or the end of the test.
@@ -75,11 +87,14 @@ func (f *fixture) start(t *testing.T, o consumerOpts) (c *sqsconsumer.Consumer, 
 	if o.pinger == nil {
 		o.pinger = env.App
 	}
+	if o.auth == nil {
+		o.auth = trustingAuth{}
+	}
 	opts := options()
 	if o.opts != nil {
 		opts = *o.opts
 	}
-	c = sqsconsumer.NewConsumer(o.api, &f.queues, o.proc, o.pinger, observability.NewMetrics(f.reg), slog.New(slog.DiscardHandler), opts)
+	c = sqsconsumer.NewConsumer(o.api, &f.queues, o.proc, o.auth, o.pinger, observability.NewMetrics(f.reg), slog.New(slog.DiscardHandler), opts)
 	c.Start(t.Context())
 	var once sync.Once
 	var err error
@@ -97,7 +112,8 @@ func (f *fixture) start(t *testing.T, o consumerOpts) (c *sqsconsumer.Consumer, 
 
 func (f *fixture) send(t *testing.T, body, group string) string {
 	t.Helper()
-	return testkit.SendMessage(t, f.sqs, f.queues.WagerURL, body, testkit.SendOpts{GroupID: group})
+	token := cmp.Or(testkit.BodyProviderID(body), "provider-a") // read as the provider id by trustingAuth
+	return testkit.SendMessage(t, f.sqs, f.queues.WagerURL, body, testkit.SendOpts{GroupID: group, Token: token})
 }
 
 // metric is the value of the counter or gauge sample of name whose labels

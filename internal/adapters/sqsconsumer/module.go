@@ -10,6 +10,7 @@ import (
 
 	"github.com/KaioVinicios/pda/internal/adapters/awsclient"
 	"github.com/KaioVinicios/pda/internal/app"
+	"github.com/KaioVinicios/pda/internal/auth"
 	"github.com/KaioVinicios/pda/internal/config"
 	"github.com/KaioVinicios/pda/internal/observability"
 )
@@ -23,9 +24,9 @@ var Module = fx.Module("sqsconsumer",
 )
 
 func newModuleConsumer(lc fx.Lifecycle, cfg config.Config, api *sqs.Client, queues *awsclient.Queues,
-	proc *app.ConsumeWager, pool *pgxpool.Pool, m *observability.Metrics, log *slog.Logger,
+	proc *app.ConsumeWager, verifier *auth.Verifier, pool *pgxpool.Pool, m *observability.Metrics, log *slog.Logger,
 ) *Consumer {
-	c := NewConsumer(api, queues, proc, pool, m, log, Options{
+	c := NewConsumer(api, queues, proc, verifier, pool, m, log, Options{
 		Pollers: cfg.SQSConsumerPollers, ReceiveBatch: cfg.SQSReceiveBatch, WaitTime: cfg.SQSWaitTime,
 		Visibility: cfg.SQSVisibilityTimeout, ProcessingTimeout: cfg.SQSProcessingTimeout,
 		MaxInFlight: cfg.SQSMaxInFlight, RetryMaxDelay: cfg.SQSRetryMaxDelay,

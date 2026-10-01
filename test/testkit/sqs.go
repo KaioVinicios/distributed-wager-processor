@@ -1,6 +1,7 @@
 package testkit
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"strconv"
@@ -10,6 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
+
+	"github.com/KaioVinicios/pda/internal/adapters/sqsconsumer"
 )
 
 // WagerData is the data of a WagerTransactionRequested (messaging.md §3.1);
@@ -45,6 +48,39 @@ type SendOpts struct {
 	GroupID       string
 	DedupID       string // "" = a new one: the app's deduplication is exercised, not the FIFO's (TST-C11)
 	CorrelationID string // "" = no correlationId attribute
+	// Token is the accessToken attribute (D-23). "" = a real token of the
+	// provider named in data.providerId, or of provider-a when the body names
+	// none (a malformed body, an event of the audit queue).
+	Token string
+	// NoToken sends without the accessToken attribute.
+	NoToken bool
+}
+
+// tokenFor is the accessToken SendMessage attaches (spec of 01/10, decision 9).
+func tokenFor(body string, o SendOpts, token func(clientID string) string) string {
+	switch {
+	case o.NoToken:
+		return ""
+	case o.Token != "":
+		return o.Token
+	}
+	return token(cmp.Or(BodyProviderID(body), "provider-a"))
+}
+
+// BodyProviderID is the data.providerId of a WagerTransactionRequested body,
+// "" when the body names none.
+func BodyProviderID(body string) string {
+	var env struct {
+		Data struct {
+			ProviderID string `json:"providerId"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(body), &env) // a malformed body names no provider
+	return env.Data.ProviderID
+}
+
+func stringAttribute(v string) types.MessageAttributeValue {
+	return types.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String(v)}
 }
 
 // SendMessage sends body to the FIFO queue and returns the SQS message id.
@@ -57,10 +93,15 @@ func SendMessage(tb testing.TB, client *sqs.Client, queueURL, body string, o Sen
 		QueueUrl: aws.String(queueURL), MessageBody: aws.String(body),
 		MessageGroupId: aws.String(o.GroupID), MessageDeduplicationId: aws.String(o.DedupID),
 	}
+	attrs := map[string]types.MessageAttributeValue{}
 	if o.CorrelationID != "" {
-		in.MessageAttributes = map[string]types.MessageAttributeValue{
-			"correlationId": {DataType: aws.String("String"), StringValue: aws.String(o.CorrelationID)},
-		}
+		attrs["correlationId"] = stringAttribute(o.CorrelationID)
+	}
+	if token := tokenFor(body, o, func(clientID string) string { return Token(tb, clientID) }); token != "" {
+		attrs[sqsconsumer.AccessTokenAttribute] = stringAttribute(token)
+	}
+	if len(attrs) > 0 {
+		in.MessageAttributes = attrs
 	}
 	out, err := client.SendMessage(tb.Context(), in)
 	if err != nil {

@@ -3,8 +3,6 @@
 package integration_test
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"maps"
 	"net/http"
 	"strings"
@@ -117,24 +115,8 @@ func TestAuthRealIdP(t *testing.T) {
 func expiredToken(t *testing.T) string {
 	t.Helper()
 	raw := testkit.FreshToken(t, "provider-short-lived")
-	time.Sleep(time.Until(tokenExpiry(t, raw).Add(time.Second + 500*time.Millisecond)))
+	time.Sleep(time.Until(testkit.TokenExpiry(t, raw).Add(time.Second + 500*time.Millisecond)))
 	return raw
-}
-
-func tokenExpiry(t *testing.T, raw string) time.Time {
-	t.Helper()
-	parts := strings.Split(raw, ".")
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		t.Fatal(err)
-	}
-	var claims struct {
-		Exp int64 `json:"exp"`
-	}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		t.Fatal(err)
-	}
-	return time.Unix(claims.Exp, 0)
 }
 
 // Covers: AUTH-02, TST-A01, E1 (A01b)
@@ -223,5 +205,57 @@ func TestPublicEndpoints(t *testing.T) {
 		case !public[route] && resp.Status != http.StatusUnauthorized:
 			t.Errorf("%s without a token = %d, want 401", route, resp.Status)
 		}
+	}
+}
+
+// Covers: AUTH-04, AUTH-05, AUTH-07, AUTH-09, TST-A02, TST-A03, E2 (A05)
+// Sensitivity: matchProvider returning nil → the REFUND of provider-b in the name of provider-a is PROCESSED and "4 messages in the DLQ" is never reached.
+//
+// The scenario of the final audit (D-23): provider-b, with its own token,
+// sends a REFUND naming provider-a against a BET of provider-a. It, and the
+// messages without a valid provider token, go to the DLQ and record nothing.
+// The queue is the package's isolated one; the IAM permission to send is I04f.
+//
+// Not parallel: the counts are global, so no other test may write meanwhile.
+func TestSQSProviderIdentity(t *testing.T) {
+	w := server.OpenWallet(t, testkit.BRL("100.00"))
+	bet := wager(w, "provider-a", "BET", "30.00", unique("bet"), "")
+	result(t, server.Client(t, "provider-a"), bet, http.StatusOK)
+	before := testkit.SnapshotCounts(t, server.Owner())
+
+	sends := []struct {
+		code string
+		body testkit.Wager
+		opts testkit.SendOpts
+	}{
+		{
+			"PROVIDER_MISMATCH", wager(w, "provider-a", "REFUND", "30.00", unique("refund"), bet.ExternalTransactionID),
+			testkit.SendOpts{Token: testkit.Token(t, "provider-b")},
+		},
+		{"UNAUTHENTICATED", wager(w, "provider-a", "BET", "1.00", unique("bet"), ""), testkit.SendOpts{NoToken: true}},
+		{"FORBIDDEN", wager(w, "provider-a", "BET", "1.00", unique("bet"), ""), testkit.SendOpts{Token: testkit.Token(t, "wallet-service")}},
+		{"UNAUTHENTICATED", wager(w, "provider-a", "BET", "1.00", unique("bet"), ""), testkit.SendOpts{Token: testkit.ForgedToken(t)}},
+	}
+	want := map[string]string{} // SQS id → errorCode
+	for _, s := range sends {
+		o := s.opts
+		o.GroupID = w.ID
+		want[server.SendWager(t, sqsWager(t, unique("msg"), s.body), o)] = s.code
+	}
+	for _, m := range server.ReceiveDLQ(t, len(sends)) {
+		id := m.Attributes["originalMessageId"]
+		if code, ok := want[id]; !ok || m.Attributes["errorCode"] != code || m.Attributes["errorCategory"] != "CORRECTABLE" {
+			t.Errorf("DLQ message of %s = %v, want errorCode %s", id, m.Attributes, code)
+		}
+		if _, leaked := m.Attributes["accessToken"]; leaked {
+			t.Errorf("the DLQ copy of %s carries the access token", id)
+		}
+	}
+	server.AssertQueueDrained(t)
+	if after := testkit.SnapshotCounts(t, server.Owner()); !maps.Equal(before, after) {
+		t.Fatalf("rows changed: before %v, after %v", before, after)
+	}
+	if got := balanceOf(t, w.ID); got.Balance != testkit.BRL("70.00") || got.Version != 2 {
+		t.Fatalf("wallet = %+v, want 70.00 after the BET only", got)
 	}
 }

@@ -194,6 +194,22 @@ func TestFxFailFast(t *testing.T) {
 		})
 	}
 
+	t.Run("unreachable identity provider, consumer only (D-23)", func(t *testing.T) {
+		cfg := integrationConfig(t)
+		cfg.OIDCJWKSURL = "http://127.0.0.1:1/certs"
+		app := fx.New(append(bootstrap.OptionsFor(config.Roles{Consumer: true}), fx.Replace(cfg), fx.NopLogger)...)
+		ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+		defer cancel()
+		err := app.Start(ctx)
+		if err == nil {
+			_ = app.Stop(ctx)
+			t.Fatal("Start() error = nil, want the JWKS fail-fast of the consumer")
+		}
+		if !strings.Contains(err.Error(), "JWKS") {
+			t.Fatalf("Start() error = %q, want it to mention JWKS", err.Error())
+		}
+	})
+
 	t.Run("invalid role variable", func(t *testing.T) {
 		t.Setenv("HTTP_ENABLED", "talvez-42")
 		app := fx.New(append(bootstrap.Options(), fx.NopLogger)...)

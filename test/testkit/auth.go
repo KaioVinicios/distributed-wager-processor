@@ -16,6 +16,9 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
+
+	"github.com/KaioVinicios/pda/internal/auth"
+	"github.com/KaioVinicios/pda/internal/config"
 )
 
 // KeycloakURL is the compose Keycloak seen from the host.
@@ -63,6 +66,42 @@ func FreshToken(tb testing.TB, clientID string) string {
 		tb.Fatal(err)
 	}
 	return raw
+}
+
+// TokenExpiry is the exp of a token.
+func TokenExpiry(tb testing.TB, raw string) time.Time {
+	tb.Helper()
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 {
+		tb.Fatal("testkit: the token is not a JWS")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		tb.Fatal(err)
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		tb.Fatal(err)
+	}
+	return time.Unix(claims.Exp, 0)
+}
+
+// OIDCConfig sets on cfg the OIDC settings of the application under test: the
+// realm pda of the compose Keycloak, seen from the host, with a 1 s skew.
+func OIDCConfig(cfg config.Config) config.Config {
+	cfg.OIDCIssuer, cfg.OIDCJWKSURL = KeycloakIssuer, KeycloakIssuer+"/protocol/openid-connect/certs"
+	cfg.OIDCAudience, cfg.OIDCClockSkew = "pda-api", time.Second
+	return cfg
+}
+
+// NewVerifier is the verifier of the application under test (OIDCConfig).
+func NewVerifier(tb testing.TB) *auth.Verifier {
+	tb.Helper()
+	client := &http.Client{Timeout: 5 * time.Second}
+	tb.Cleanup(client.CloseIdleConnections)
+	return auth.NewVerifier(OIDCConfig(config.Config{}), client)
 }
 
 func cachedTokenOf(tb testing.TB, realm, clientID string) string {

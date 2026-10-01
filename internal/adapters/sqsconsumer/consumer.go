@@ -43,6 +43,7 @@ type Metrics interface {
 	DLQDepth(queue string, n int)
 	ReceiveFailed()
 	DeleteFailed()
+	AuthFailure(reason string)
 }
 
 // Options are the consumer settings (messaging.md §4.1).
@@ -82,6 +83,7 @@ type Consumer struct {
 	api     QueueAPI
 	queues  *awsclient.Queues
 	proc    Processor
+	authn   Authenticator
 	gate    *healthGate
 	metrics Metrics
 	log     *slog.Logger
@@ -96,9 +98,9 @@ type Consumer struct {
 }
 
 // NewConsumer builds a consumer; Start starts it.
-func NewConsumer(api QueueAPI, queues *awsclient.Queues, proc Processor, db Pinger, m Metrics, log *slog.Logger, opts Options) *Consumer {
+func NewConsumer(api QueueAPI, queues *awsclient.Queues, proc Processor, authn Authenticator, db Pinger, m Metrics, log *slog.Logger, opts Options) *Consumer {
 	return &Consumer{
-		api: api, queues: queues, proc: proc, gate: newHealthGate(db, log, gateInterval), metrics: m, log: log,
+		api: api, queues: queues, proc: proc, authn: authn, gate: newHealthGate(db, log, gateInterval), metrics: m, log: log,
 		opts: opts, sem: make(chan struct{}, opts.MaxInFlight),
 	}
 }
@@ -159,8 +161,9 @@ func (c *Consumer) pollLoop(poll, work context.Context) {
 			VisibilityTimeout:   int32(c.opts.Visibility / time.Second), //nolint:gosec // ≤ 12 h, validated by config
 			MessageSystemAttributeNames: []types.MessageSystemAttributeName{
 				types.MessageSystemAttributeNameMessageGroupId, types.MessageSystemAttributeNameApproximateReceiveCount,
+				types.MessageSystemAttributeNameSentTimestamp,
 			},
-			MessageAttributeNames: []string{correlationAttribute},
+			MessageAttributeNames: []string{correlationAttribute, AccessTokenAttribute},
 		})
 		if err != nil {
 			if poll.Err() != nil {
@@ -236,18 +239,30 @@ func (c *Consumer) handleGroup(poll, work context.Context, group []types.Message
 	}
 }
 
-// handle concludes one message and applies the action.
+// handle concludes one message and applies the action, in the order of D-23:
+// the provider's token, the envelope, the provider of the body, then the use
+// case. Nothing is read before the authorization.
 func (c *Consumer) handle(work context.Context, msg types.Message, receivedAt time.Time) action {
 	start := time.Now()
 	log := c.log.With("sqsMessageId", aws.ToString(msg.MessageId))
-	m, err := parseEnvelope(aws.ToString(msg.Body), aws.ToString(msg.MessageAttributes[correlationAttribute].StringValue), receivedAt)
-	var res app.ConsumeResult
+	ctx, cancel := context.WithTimeout(work, c.opts.ProcessingTimeout)
+	defer cancel()
+	var (
+		m   app.WagerMessage
+		res app.ConsumeResult
+	)
+	p, err := authenticate(ctx, c.authn, msg, receivedAt)
+	if err == nil {
+		m, err = parseEnvelope(aws.ToString(msg.Body), aws.ToString(msg.MessageAttributes[correlationAttribute].StringValue), receivedAt)
+	}
 	if err == nil {
 		log = log.With(messageIDs(m)...)
-		ctx, cancel := context.WithTimeout(work, c.opts.ProcessingTimeout)
-		res, err = c.proc.Execute(ctx, m)
-		cancel()
+		err = matchProvider(p, m)
 	}
+	if err == nil {
+		res, err = c.proc.Execute(ctx, m)
+	}
+	c.countRefusal(err)
 	a := decide(conclude(res, err), c.stopping.Load(), receiveCount(msg), c.opts.RetryMaxDelay)
 	c.apply(work, msg, a, err, log)
 	if a.outcome != "" {

@@ -144,7 +144,7 @@ func TestAuditAbsentLeavesNoPollBehind(t *testing.T) {
 		id := testkit.NewID()
 		audit.Absent(t, 1500*time.Millisecond, id)
 		// Straight into the audit queue: nothing else receives from it meanwhile.
-		testkit.SendMessage(t, sqsClient, topic.AuditQueueURL, auditEnvelope(id, wallet, ""), testkit.SendOpts{GroupID: wallet, DedupID: id})
+		testkit.SendMessage(t, sqsClient, topic.AuditQueueURL, auditEnvelope(id, wallet, ""), testkit.SendOpts{GroupID: wallet, DedupID: id, NoToken: true})
 		time.Sleep(300 * time.Millisecond)
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 		_, err := audit.Wait(ctx, id)
@@ -221,7 +221,7 @@ func TestAuditRecoversLostReceive(t *testing.T) {
 	wallet := testkit.NewID()
 	ids := []string{testkit.NewID(), testkit.NewID(), testkit.NewID()}
 	for _, id := range ids {
-		testkit.SendMessage(t, sqsClient, topic.AuditQueueURL, auditEnvelope(id, wallet, ""), testkit.SendOpts{GroupID: wallet, DedupID: id})
+		testkit.SendMessage(t, sqsClient, topic.AuditQueueURL, auditEnvelope(id, wallet, ""), testkit.SendOpts{GroupID: wallet, DedupID: id, NoToken: true})
 	}
 	audit.WaitFor(t, ids...)
 	if !lose.hit.Load() {
@@ -246,7 +246,7 @@ func TestAuditCountsRedeliveryOnce(t *testing.T) {
 	wallet, id, last := testkit.NewID(), testkit.NewID(), testkit.NewID()
 	send := func(id string) {
 		t.Helper()
-		testkit.SendMessage(t, sqsClient, topic.AuditQueueURL, auditEnvelope(id, wallet, ""), testkit.SendOpts{GroupID: wallet, DedupID: id})
+		testkit.SendMessage(t, sqsClient, topic.AuditQueueURL, auditEnvelope(id, wallet, ""), testkit.SendOpts{GroupID: wallet, DedupID: id, NoToken: true})
 	}
 	send(id)
 	audit.WaitFor(t, id)

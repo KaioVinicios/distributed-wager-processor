@@ -18,6 +18,7 @@ import (
 	"github.com/KaioVinicios/pda/internal/adapters/awsclient"
 	"github.com/KaioVinicios/pda/internal/app"
 	"github.com/KaioVinicios/pda/internal/apperrors"
+	"github.com/KaioVinicios/pda/internal/auth"
 )
 
 // fakeQueue answers the receives with batches, then with receiveErr or empty
@@ -76,6 +77,9 @@ func (q *fakeQueue) receiveTimes() []time.Time {
 // countingMetrics counts what the consumer reports.
 type countingMetrics struct {
 	receiveFailed, deleteFailed, duplicates atomic.Int32
+
+	mu          sync.Mutex
+	authReasons []string
 }
 
 func (*countingMetrics) Received()                       {}
@@ -86,6 +90,46 @@ func (*countingMetrics) SentToDLQ(string)                {}
 func (*countingMetrics) DLQDepth(string, int)            {}
 func (m *countingMetrics) ReceiveFailed()                { m.receiveFailed.Add(1) }
 func (m *countingMetrics) DeleteFailed()                 { m.deleteFailed.Add(1) }
+
+func (m *countingMetrics) AuthFailure(reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.authReasons = append(m.authReasons, reason)
+}
+
+func (m *countingMetrics) reasons() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string{}, m.authReasons...)
+}
+
+// trustingAuth reads the token as the provider id: these tests exercise the
+// queue handling; U35 exercises the authorization.
+type trustingAuth struct{}
+
+func (trustingAuth) AuthenticateAt(_ context.Context, raw string, _ time.Time) (auth.Principal, error) {
+	return auth.Principal{ProviderID: raw, Roles: []auth.Role{auth.RoleProvider}}, nil
+}
+
+// message is a received message of body, with provider-a's token for trustingAuth.
+func message(body string) types.Message {
+	return types.Message{
+		MessageId: aws.String("sqs-1"), ReceiptHandle: aws.String("rh-1"), Body: aws.String(body),
+		Attributes: map[string]string{"MessageGroupId": "g"},
+		MessageAttributes: map[string]types.MessageAttributeValue{
+			AccessTokenAttribute: {DataType: aws.String("String"), StringValue: aws.String("provider-a")},
+		},
+	}
+}
+
+// unitOptions are the consumer settings of the unit tests.
+func unitOptions(waitTime time.Duration) Options {
+	return Options{
+		Pollers: 1, ReceiveBatch: 10, WaitTime: waitTime, Visibility: 5 * time.Second,
+		ProcessingTimeout: 3 * time.Second, MaxInFlight: 4, RetryMaxDelay: time.Second,
+		ShutdownTimeout: time.Second, DLQName: "dlq",
+	}
+}
 
 type upPinger struct{}
 
@@ -104,11 +148,7 @@ func unitConsumer(t *testing.T, q *fakeQueue, m *countingMetrics, waitTime time.
 
 func unitConsumerWith(t *testing.T, q *fakeQueue, m *countingMetrics, waitTime time.Duration, proc Processor, log *slog.Logger) *Consumer {
 	t.Helper()
-	c := NewConsumer(q, &awsclient.Queues{WagerURL: "wager", DLQURL: "dlq"}, proc, upPinger{}, m, log, Options{
-		Pollers: 1, ReceiveBatch: 10, WaitTime: waitTime, Visibility: 5 * time.Second,
-		ProcessingTimeout: 3 * time.Second, MaxInFlight: 4, RetryMaxDelay: time.Second,
-		ShutdownTimeout: time.Second, DLQName: "dlq",
-	})
+	c := NewConsumer(q, &awsclient.Queues{WagerURL: "wager", DLQURL: "dlq"}, proc, trustingAuth{}, upPinger{}, m, log, unitOptions(waitTime))
 	c.Start(t.Context())
 	t.Cleanup(func() { _ = c.Stop(context.WithoutCancel(t.Context())) })
 	return c
@@ -131,10 +171,7 @@ func TestShortPollingPauses(t *testing.T) {
 // Covers: SQS-05 (messaging.md §4.2)
 // Sensitivity: without DeleteFailed → "delete failures 0".
 func TestDeleteFailureIsCounted(t *testing.T) {
-	msg := types.Message{
-		MessageId: aws.String("sqs-1"), ReceiptHandle: aws.String("rh-1"), Body: aws.String(validBody),
-		Attributes: map[string]string{"MessageGroupId": "g"},
-	}
+	msg := message(validBody)
 	q := &fakeQueue{batches: [][]types.Message{{msg}}, deleteErr: errors.New("throttled")}
 	m := &countingMetrics{}
 	unitConsumer(t, q, m, 0)
@@ -244,10 +281,7 @@ func TestFailureLogsCarryTheMessageIDs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			msg := types.Message{
-				MessageId: aws.String("sqs-1"), ReceiptHandle: aws.String("rh-1"), Body: aws.String(tc.body),
-				Attributes: map[string]string{"MessageGroupId": "g"},
-			}
+			msg := message(tc.body)
 			logs := &lockedLog{}
 			unitConsumerWith(t, &fakeQueue{batches: [][]types.Message{{msg}}}, &countingMetrics{}, 0, tc.proc,
 				slog.New(slog.NewJSONHandler(logs, nil)))

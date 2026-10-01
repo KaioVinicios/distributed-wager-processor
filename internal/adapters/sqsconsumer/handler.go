@@ -59,12 +59,13 @@ func conclude(res app.ConsumeResult, err error) conclusion {
 
 // decide maps a conclusion to the action of lifecycle §6.2. Only a
 // cancellation while the consumer stops releases the message (lifecycle §8);
-// every other error that is not input, conflict or permanent is retried with
-// backoff, including the unclassified ones (D-05).
+// every other error that is not input, conflict, a refused authorization
+// (D-23) or permanent is retried with backoff, including the unclassified ones
+// (D-05).
 func decide(c conclusion, stopping bool, receiveCount int, ceiling time.Duration) action {
 	if c.err != nil {
 		switch apperrors.Classify(c.err) {
-		case apperrors.KindInput, apperrors.KindConflict:
+		case apperrors.KindInput, apperrors.KindConflict, apperrors.KindForbidden:
 			code := apperrors.CodeOf(c.err)
 			if code == "" {
 				code = codeMalformedMessage
@@ -72,8 +73,8 @@ func decide(c conclusion, stopping bool, receiveCount int, ceiling time.Duration
 			return action{kind: actDLQ, code: code, category: categoryCorrectable}
 		case apperrors.KindPermanent:
 			return action{kind: actDLQ, code: codeInternalError, category: categoryTransient}
-		case apperrors.KindTransient, apperrors.KindNotFound, apperrors.KindForbidden, apperrors.KindBusiness:
-			// Retried below; the use case returns none of the last three.
+		case apperrors.KindTransient, apperrors.KindNotFound, apperrors.KindBusiness:
+			// Retried below; the use case returns neither of the last two.
 		}
 		if stopping && errors.Is(c.err, context.Canceled) {
 			return action{kind: actRelease}

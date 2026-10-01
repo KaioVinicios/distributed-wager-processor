@@ -111,6 +111,12 @@ func (h *Harness) SendWager(tb testing.TB, body string, o SendOpts) string {
 	return SendMessage(tb, h.sqs, h.WagerQueueURL, body, o)
 }
 
+// ReceiveDLQ reads and deletes n messages of the DLQ (testkit.ReceiveDLQ).
+func (h *Harness) ReceiveDLQ(tb testing.TB, n int) []DLQMessage {
+	tb.Helper()
+	return ReceiveDLQ(tb, h.sqs, h.DLQURL, n)
+}
+
 // AssertQueueDrained waits until the wager queue is empty.
 func (h *Harness) AssertQueueDrained(tb testing.TB) {
 	tb.Helper()
@@ -216,8 +222,7 @@ func (e *Env) newFixture(ctx context.Context) (*fixture, error) {
 	cfg := e.Config()
 	cfg.WagerQueueName, cfg.WagerDLQName = wager, dlq
 	cfg.SNSEventsTopicName = topic.Name
-	cfg.OIDCIssuer, cfg.OIDCJWKSURL = KeycloakIssuer, KeycloakIssuer+"/protocol/openid-connect/certs"
-	cfg.OIDCAudience, cfg.OIDCClockSkew = "pda-api", time.Second
+	cfg = OIDCConfig(cfg)
 	cfg.APIDocsEnabled = true
 	cfg.ReferenceRetryBaseDelay, cfg.ReferenceRetryMaxDelay = 100*time.Millisecond, time.Second
 	cfg.ReferenceMaxAttempts, cfg.ReferenceTTL = 3, 3*time.Second

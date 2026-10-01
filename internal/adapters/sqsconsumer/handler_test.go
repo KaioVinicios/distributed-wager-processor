@@ -85,6 +85,12 @@ func TestDecide(t *testing.T) {
 			action{kind: actDLQ, code: "IDEMPOTENCY_KEY_REUSED", category: "CORRECTABLE"},
 		},
 		{
+			"refused authorization (D-23)",
+			conclusion{err: apperrors.New(apperrors.KindForbidden, "PROVIDER_MISMATCH", errors.New("x"))},
+			false,
+			action{kind: actDLQ, code: "PROVIDER_MISMATCH", category: "CORRECTABLE"},
+		},
+		{
 			"permanent without a record",
 			conclusion{err: apperrors.New(apperrors.KindPermanent, "", errors.New("x"))},
 			false,
@@ -153,12 +159,17 @@ func TestRetryDelay(t *testing.T) {
 	}
 }
 
-// Covers: SQS-07, SQS-10 (messaging.md §4.4)
+// Covers: SQS-07, SQS-10 (messaging.md §4.4), D-23 (the token never reaches the DLQ copy)
+// Sensitivity: dlqInput copying msg.MessageAttributes → the attribute count fails, and with it the access token check.
 func TestDLQInput(t *testing.T) {
 	failedAt := time.Date(2026, 9, 29, 12, 0, 0, 123456789, time.FixedZone("BRT", -3*3600))
 	msg := types.Message{
 		MessageId: aws.String("sqs-id-1"), Body: aws.String(validBody),
 		Attributes: map[string]string{"MessageGroupId": "wallet-1"},
+		MessageAttributes: map[string]types.MessageAttributeValue{
+			AccessTokenAttribute: {DataType: aws.String("String"), StringValue: aws.String("a-provider-token")},
+			"correlationId":      {DataType: aws.String("String"), StringValue: aws.String("corr-1")},
+		},
 	}
 	in := dlqInput("https://dlq", msg, action{kind: actDLQ, code: "UNKNOWN_WALLET", category: "CORRECTABLE"}, failedAt)
 	if aws.ToString(in.QueueUrl) != "https://dlq" || aws.ToString(in.MessageBody) != validBody ||
@@ -176,6 +187,9 @@ func TestDLQInput(t *testing.T) {
 		if a := in.MessageAttributes[k]; aws.ToString(a.DataType) != "String" || aws.ToString(a.StringValue) != v {
 			t.Errorf("attribute %s = %s %s, want String %s", k, aws.ToString(a.DataType), aws.ToString(a.StringValue), v)
 		}
+	}
+	if _, ok := in.MessageAttributes[AccessTokenAttribute]; ok {
+		t.Fatal("the DLQ copy carries the access token (D-23)")
 	}
 
 	msg.Attributes = nil
