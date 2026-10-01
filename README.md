@@ -78,6 +78,7 @@ curl -s localhost:8081/health/ready
 | `keycloak` | `localhost:8080` (console: `admin` / `admin-local`) | IdP OIDC; emite tokens `client_credentials` |
 | `ministack` | `localhost:4566` | SQS e SNS FIFO, com as políticas IAM avaliadas (`AUTH=true`) |
 | `migrate`, `aws-init` | — | Tarefas únicas da subida (migrations; filas, tópico e IAM) |
+| `k6` (profile `load`) | — | Gerador do teste de carga. Só roda com `make load-test`, nunca no `docker compose up` ([`docs/load-test.md`](docs/load-test.md)) |
 
 Rotas da API (contrato completo em [`api/openapi.yaml`](api/openapi.yaml)):
 
@@ -476,6 +477,7 @@ Os testes usam só `testing` e `go test`, todos com `-race` nos alvos do `make`.
 | Portão de qualidade | `make check` (formatação, `golangci-lint`, `go vet` com e sem tags, `go.mod` limpo, versão do Go, unitários com `-race`) | Go e Docker | ~15 s com cache; mais na primeira vez, que baixa a imagem do `golangci-lint` e analisa tudo |
 | Integração (tag `integration`) | `make test-integration` | Docker (sobe a infraestrutura sozinho) | ~50 s com a infraestrutura de pé |
 | Multi-instância e falhas (tag `e2e`) | `make test-e2e` | Docker (idem) | ~2,5 min |
+| Carga (opcional, fora do CI) | `make load-test` (`RATE`, `DURATION`, `WALLETS`) | O compose de pé (`docker compose up --build -d --wait`) | ~1,5 min a 100 req/s; ~2 min a 200 req/s, com a drenagem da outbox |
 
 ¹ Medidos num MacBook (Apple Silicon) com o cache de build do Go preenchido. Quando a infraestrutura ainda não está de pé, o `make infra-up` soma cerca de 1 min, porque espera o Keycloak ficar pronto. Num clone novo, com os caches do Go vazios, a primeira execução soma o download dos módulos e a compilação: `go test ./...` levou ~32 s, e o `make test-e2e` ~2 min 20 s.
 
@@ -488,6 +490,7 @@ gofmt -l .                    # não imprime nada
 make check                    # o portão de qualidade completo
 make test-integration         # PostgreSQL, Keycloak e MiniStack reais, app em processo
 make test-e2e                 # 3 processos do binário, pontos de falha, quedas e shutdown
+make load-test                # opcional: k6 contra as 3 réplicas de pé (docs/load-test.md)
 ```
 
 - **Não rode `make test-integration` e `make test-e2e` ao mesmo tempo:** os testes de resiliência pausam o PostgreSQL e o MiniStack compartilhados.
@@ -526,5 +529,6 @@ make test-e2e                 # 3 processos do binário, pontos de falha, quedas
 | Preparação dos testes, integração, múltiplas instâncias, simulações de falha e build tags | [`docs/testing.md`](docs/testing.md) |
 | Contratos HTTP e de eventos | [`api/openapi.yaml`](api/openapi.yaml), [`api/events.yaml`](api/events.yaml) |
 | Checklist de requisitos com o teste que comprova cada um | [`docs/delivery-requirements.md`](docs/delivery-requirements.md) |
+| Teste de carga ⭐ (comando, metodologia, ambiente e resultados) | [`docs/load-test.md`](docs/load-test.md): 100 req/s, p99 de 98 ms, 1.000/1.000 carteiras consistentes |
 
 A documentação completa do sistema fica em [`docs/`](docs/) (mapa no [`ARCHITECTURE.md`](ARCHITECTURE.md) §18). As notas de desenvolvimento (specs, planos, spikes e diário) ficam em [`docs/dev/`](docs/dev/).

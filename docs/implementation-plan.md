@@ -258,9 +258,33 @@ Testes R01–R04: queda do PostgreSQL, queda do SQS e shutdown gracioso com HTTP
   - na §8.9, cada réplica expõe só os próprios contadores, e as três linhas do exemplo saíram na `app-1` por sorte. O exemplo passou a ler as 3 réplicas;
   - também na §8.9, o README avisa que a ordem entre eventos da mesma carteira não é estrita com vários publishers (messaging §7), algo já documentado mas que o exemplo não mostrava.
 
-#### M12 — Folga / opcionais (restante)
+#### M12 — Folga / opcionais (~2 h) — ✅ concluído em 30/09 (só o teste de carga)
 
 Só se M9–M11 estiverem verdes. Por ordem: teste de carga (test-plan §9), tracing com OpenTelemetry e dashboard.
+
+- **Escopo, por decisão do autor (D-21):**
+  - o teste de carga entra;
+  - o OpenTelemetry fica fora, porque sem propagação pela mensageria o trace terminaria na requisição HTTP, e a versão útil não cabia no prazo. O esboço está no `ARCHITECTURE.md` §17;
+  - o dashboard fica fora.
+- **Entregue:**
+  - `make load-test`: o `scripts/load-test.sh` roda o serviço `k6` do compose (`grafana/k6:2.3.0`, profile `load`) com o `test/load/wager.js`;
+  - modelo aberto (`constant-arrival-rate`) nas 3 réplicas, com a mistura de 70% BET, 25% WIN e 5% REFUND desenhada para não gerar rejeições por acaso;
+  - latência só da janela, os contadores do servidor como deltas das 3 réplicas e o atraso exato da outbox por SQL;
+  - portões de correção: erros < 1%, outbox drenada em 60 s e as 1.000 carteiras reconciliadas;
+  - o relatório em `docs/load-test.md`.
+- **Processo:** sem Go novo. O script k6 virou a exceção `test/load/*.js` do §4.4, validada por execuções reais e pela sabotagem de cada portão (saídas 110, 110, 99 e 1).
+- **Resultados** (Apple M1, VM do Docker com 4 CPUs):
+  - a 100 req/s: p99 de 98 ms, atraso da outbox p99 de 0,6 s;
+  - a 200 req/s: 24 iterações perdidas, p99 de 0,9 s, atraso p99 de 36 s;
+  - a 400 req/s: reprovado pela drenagem.
+
+  Nas três taxas: 0 erros, 0 conflitos e 1.000/1.000 carteiras consistentes. A canônica caiu para 100 req/s pela regra da spec, e o primeiro limite é a publicação da outbox (~240 eventos/s, MiniStack no teto de 1 CPU).
+- **Achados da execução:**
+  - recriar o diretório de saída (`rm -rf` + `mkdir`) entre execuções deixava o Docker Desktop com um bind mount defasado, e o k6 às vezes não gravava a saída. A reprodução isolada falhou 15 vezes em 20, e com o diretório estável, 0 em 30. O script passou a apagar só os arquivos;
+  - o `setup()` espera a outbox drenar antes de abrir a janela, para que a métrica e o SQL contem os mesmos eventos (as contagens bateram em todas as execuções);
+  - a amostragem do `docker stats` degrada a medida: a execução de observação perdeu 394 iterações, contra 24 na da tabela. Ela foi usada só para atribuir o gargalo.
+
+**Cobre:** TST-L01 (OBS-05 cortado). Spec: [`dev/specs/2026-09-30-m12-load-test-design.md`](dev/specs/2026-09-30-m12-load-test-design.md) · plano: [`dev/plans/2026-09-30-m12-load-test.md`](dev/plans/2026-09-30-m12-load-test.md) · relatório: [`load-test.md`](load-test.md).
 
 ---
 
@@ -270,7 +294,7 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 
 | # | Corte | Impacto | Substituto |
 | --- | --- | --- | --- |
-| 1 | M12 (carga, OTel, dashboard) | Só diferenciais | — |
+| 1 | M12 (carga, OTel, dashboard). Usado no M12: OTel e dashboard cortados (D-21), carga entregue | Só diferenciais | — |
 | 2 | R02 e R04 | Menos evidência de resiliência | R01 e R03 continuam |
 | 3 | Realm `other` e `no-audience-client` | Menos casos negativos de token | Assinatura forjada e expiração continuam |
 | 4 | Lotes agrupados por `MessageGroupId` no consumidor | Menos paralelismo por instância | Processar em sequência por poller, que continua correto |

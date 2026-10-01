@@ -273,7 +273,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 - [x] **OBS-02** Logs sem credenciais, dados sensíveis ou payloads financeiros completos. *(M3, 29/09: `TestEdgeAccessLog` (sem token), `problem+json` sem ecoar valores. A prova completa é o I14 (M7).)* *(M7, 30/09: I14 com marcadores únicos (token, `amount`, chave: nenhuma linha os contém); `TestReconcile` (o WARN sem saldos); 2 sabotagens detectadas (header `Authorization` no log de acesso, `amount` na linha de conclusão).)*
 - [x] **OBS-03** Métricas de: resultados por status, duplicatas, retries, DLQ, conflitos de concorrência, atraso da outbox, latência de processamento e divergências de reconciliação. *(M4, 29/09: as 6 métricas de outbox: `TestMetrics_Outbox`, `TestOutboxBacklogGauges`, I05c, I05d. O resto do catálogo vem no M7.)* *(M5, 29/09: as 9 métricas de SQS: `TestMetrics_SQS`, I04a, I04d, `TestDeadlineRelease`, `TestDLQSendFailure`, `TestDeleteFailureIsCounted`.)* *(M6, 30/09: `reference_pending_transactions`, `reference_retries_total` e `reference_expired_total`: `TestMetrics_References`, `TestWorkerMetrics`; conferidas em `:9091`–`:9093` depois de uma expiração real.)* *(M7, 30/09: catálogo completo: `TestMetrics_Wagers/Reconciliation/Auth/HTTP`, `TestProcessWagerMetrics`, `TestResolveReferencesMetrics`, `TestEdgeRequestMetrics`, `TestEdgeAuthFailureMetrics`, `TestPostgresErrorMapping` (`ErrLockTimeout`), e na ponta `TestMetricsEndpoint` (I25) e `TestConcurrencyConflictMetric` (I26).)*
 - [x] **OBS-04** Health checks (HTTP-08). *(M0, 29/09: ver HTTP-08.)*
-- [ ] **OBS-05** ⭐ Tracing com OpenTelemetry e dashboards.
+- [ ] **OBS-05** ⭐ Tracing com OpenTelemetry e dashboards. *(M12, 30/09: cortado por decisão do autor (D-21); motivo e esboço da implementação no `ARCHITECTURE.md` §17.)*
 
 ---
 
@@ -321,7 +321,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 ### 17.5 Opcionais
 
-- [ ] **TST-L01** ⭐ Teste de carga com comando reproduzível, ambiente, metodologia, throughput, p50/p95/p99, erros, conflitos e atraso da outbox.
+- [x] **TST-L01** ⭐ Teste de carga com comando reproduzível, ambiente, metodologia, throughput, p50/p95/p99, erros, conflitos e atraso da outbox. *(M12, 30/09: `make load-test` (k6 2.3.0 no compose, `test/load/wager.js`, `scripts/load-test.sh`; D-21). Canônica a 100 req/s por 60 s nas 3 réplicas: p50/p95/p99 de 3,8/14,3/98,2 ms, 0 erros, 0 conflitos, atraso da outbox p99 de 600 ms (SQL) e 1.000/1.000 carteiras consistentes. A tabela de 100, 200 e 400 req/s mostra a publicação da outbox como primeiro limite (~240 eventos/s, MiniStack no teto de 1 CPU). Portões (reconciliação, drenagem, erros, janela vazia) sabotados e detectados. Tudo em `docs/load-test.md`.)*
 
 ---
 
@@ -329,7 +329,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
 - [x] **DOC-01** O `README.md` cobre: pré-requisitos, variáveis de ambiente, inicialização das filas, aplicação e reversão das migrations, execução da aplicação, exemplos de chamadas (incluindo como obter o token) e comandos de teste. *(M10, 30/09: `README.md` §1–§9, com os comandos e exemplos executados contra o compose e os tempos dos testes medidos; a execução a partir de um clone limpo é o M11.)* *(M11, 30/09: os exemplos das §5–§8 rodaram tal como estão escritos, em `bash` e em `zsh`, num clone limpo. Três ajustes vieram daí: o `get-token.sh` passou a terminar a saída com quebra de linha, a §8.5 espera o worker concluir o REFUND e a §8.9 lê as métricas das 3 réplicas.)*
 - [x] **DOC-02** O `ARCHITECTURE.md` registra as decisões sobre: dinheiro, transações, idempotência, locks, referências pendentes, reversões, inbox/outbox, autenticação, autorização, uso do Fx e shutdown. Também reúne as justificativas pedidas ao longo do desafio (IdP, biblioteca de banco, mapeamento de Money, fronteira transacional, concorrência, máquina de estados, falhas transitórias vs permanentes, hash, códigos HTTP, parâmetros SQS e roteamento de eventos). *(M10, 30/09: `ARCHITECTURE.md` §2–§14, revisado contra o código.)*
-- [x] **DOC-03** O `ARCHITECTURE.md` explicita limitações, interpretações adotadas e trabalho não concluído. *(Interpretações e limitações escritas em 28/09; trabalho não concluído é fechado na entrega.)* *(M10, 30/09: §15 (18 interpretações), §16 (18 limitações) e §17 (opcionais não feitos, fora do escopo e pendências menores).)*
+- [x] **DOC-03** O `ARCHITECTURE.md` explicita limitações, interpretações adotadas e trabalho não concluído. *(Interpretações e limitações escritas em 28/09; trabalho não concluído é fechado na entrega.)* *(M10, 30/09: §15 (18 interpretações), §16 (18 limitações) e §17 (opcionais não feitos, fora do escopo e pendências menores).)* *(M12, 30/09: §16 ganhou a limitação 19, a vazão local da outbox medida no teste de carga, e o §17 o esboço do OpenTelemetry.)*
 - [x] **DOC-04** Há um documento separado sobre como preparar as dependências dos testes e executar a integração, as múltiplas instâncias e as simulações de falha, incluindo build tags, se usadas. *(M10, 30/09: `docs/testing.md`, com as simulações manuais de queda do PostgreSQL e do MiniStack executadas no compose.)*
 - [x] **DOC-05** Há instruções para executar os fluxos autenticados com as identidades de teste provisionadas. *(M10, 30/09: `README.md` §7 (os 7 clients e a obtenção do token) e §8 (fluxo completo com tokens reais, inclusive o SQS com as credenciais IAM do provedor); `api/requests.http`.)*
 - [x] **DOC-06** ⭐ Contrato OpenAPI (`api/openapi.yaml`) servido em `/openapi.yaml`, Swagger UI autenticável em `/docs` e coleção `api/requests.http`, com o contrato validado nos testes (D-20). *(M3, 29/09: `api/openapi.yaml`, `/docs`, `/openapi.yaml` e `api/requests.http`; I15 `TestOpenAPIContract`; `TestContract` (o validador do `testkit`); `TestEdgeDocs`.)*
@@ -353,7 +353,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 | Limitações, interpretações e trabalho não concluído (§15) | `ARCHITECTURE.md` §15–§17 |
 | README: pré-requisitos, variáveis, filas, migrations, execução, exemplos, testes, IdP e identidades (§15) | `README.md` §1–§9 |
 | Preparação dos testes, integração, multi-instância, falhas e build tags, em documento separado (§15) | `docs/testing.md` |
-| Teste de carga ⭐ (§14) | Não feito (`ARCHITECTURE.md` §17) |
+| Teste de carga ⭐ (§14) | `docs/load-test.md` · D-21 |
 
 ---
 

@@ -249,9 +249,22 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
 - **Causa:** o log do MiniStack mostrou os 200 eventos na fila de auditoria em cerca de 1 s. Um lote recebido e não registrado pelo `testkit.Audit` (o único aviso do SDK, às 22:18:36, é de uma resposta lida pela metade, e o SDK repete sem avisar) ficava em voo pelos 30 s de visibility, e o grupo FIFO junto, além do `AuditTimeout` de 10 s. Não reproduz localmente.
 - **Correção:** o `Audit` recebe com visibility de 2 s e guarda cada mensagem uma vez pelo `MessageId`. Nada muda fora do `testkit` ([spec](specs/2026-09-30-audit-lost-receive-design.md) → [plano](plans/2026-09-30-audit-lost-receive.md)).
 
+## 30/09/2026 (qua): M12, teste de carga
+
+- **Escopo:** o autor pediu só o teste de carga. O OpenTelemetry entraria só se fosse barato, e não era: sem propagação pela outbox, pelo SNS e pelo SQS, o trace terminaria na requisição HTTP. O dashboard ficou fora (D-21).
+- **Ferramenta:** k6 2.3.0 como serviço do compose (profile `load`), em modelo aberto. A carga também prova correção: a drenagem da outbox e a reconciliação das 1.000 carteiras são portões. O script k6 virou a exceção `test/load/*.js` do §4.4, validada por execuções reais e pela sabotagem de cada portão. A sonda das APIs do k6 passou, e o plano B não foi usado.
+- **Números** (Apple M1, VM com 4 CPUs):
+  - a 100 req/s: p99 de 98 ms, atraso da outbox p99 de 0,6 s;
+  - a 200 req/s: 24 iterações perdidas, p99 de 0,9 s, atraso p99 de 36 s, drenagem em 40 s;
+  - a 400 req/s: 292 req/s efetivos, reprovado pela drenagem.
+
+  Nas três: 0 erros, 0 conflitos e todas as carteiras consistentes. A canônica caiu para 100 req/s pela regra da spec.
+- **Gargalo:** a publicação da outbox, a ~240 eventos/s. Uma execução de observação com `docker stats` mostrou o MiniStack no teto de 1 CPU durante toda a carga e a drenagem. A conta de acúmulo e drenagem (~160 eventos/s acumulados, ~40 s para drenar) bateu com a medida. Virou a limitação 19 do `ARCHITECTURE.md` §16.
+- **Achado:** recriar `.local/load` entre execuções deixava o bind mount do Docker Desktop defasado, e o k6 às vezes não gravava a saída: 15 falhas em 20 numa reprodução isolada, 0 em 30 com o diretório estável. O script passou a apagar só os arquivos ([spec](specs/2026-09-30-m12-load-test-design.md) → [plano](plans/2026-09-30-m12-load-test.md) → [relatório](../load-test.md)).
+
 ## Onde paramos
 
-- **M11 concluído (commits aguardando autorização).** Todos os marcos M0–M11 estão fechados. Depois do M11, o ambiente de desenvolvimento volta a subir a partir do repositório original (o `aws-init` regenera o `.local/aws/credentials`). Próximo passo: **M12, opcionais**, se houver folga (teste de carga, OpenTelemetry, dashboard).
+- **M12 concluído (commits aguardando autorização).** Todos os marcos M0–M12 estão fechados. Do M12, só o teste de carga foi feito, e o OpenTelemetry e o dashboard foram cortados (D-21). As execuções do M12 recriaram o compose com `down -v`, então o banco de desenvolvimento só tem os dados da última execução de carga.
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - **os 3 minors do M0: resolvidos em 30/09** ([spec](specs/2026-09-30-m0-minors-design.md));

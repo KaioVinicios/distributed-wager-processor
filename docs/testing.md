@@ -238,3 +238,22 @@ O lint fica de fora do CI de propósito: o `make check` é o portão local, ante
 | Testes falhando em massa com timeout, e `docker compose ps` mostrando `(Paused)` ou *unhealthy* | Um teste de resiliência interrompido deixou um serviço pausado | `make infra-up`, ou o `unpause` por serviço da §5.2 |
 | Resultado sem tocar a infraestrutura (`(cached)`) | O `go test` reaproveitou o resultado | Use `-count=1`, como os alvos do `make` |
 | Bancos `pda_t_*` sobrando | Execução com `PDA_TEST_KEEP=1`, ou morta com `kill -9` | `docker compose exec postgres psql -U postgres -d pda -c 'DROP DATABASE "<nome>"'`, ou `docker compose down -v` para zerar tudo |
+
+---
+
+## 9. Teste de carga (opcional)
+
+O teste de carga não faz parte dos três níveis acima nem do CI, porque os números dependem da máquina. Ele mede as 3 réplicas do compose que já estão de pé, com o k6 rodando num container do próprio compose (profile `load`, D-21):
+
+```sh
+docker compose up --build -d --wait
+make load-test                                  # 200 req/s por 60 s, 1.000 carteiras
+RATE=20 DURATION=5s WALLETS=50 make load-test   # execução curta, para conferir o ambiente
+```
+
+A execução sai com código diferente de zero se:
+- a taxa de erros passar de 1%;
+- a outbox não drenar em 60 s;
+- alguma carteira divergir do ledger na reconciliação feita depois da carga.
+
+A metodologia, o ambiente medido e os resultados estão em [`load-test.md`](load-test.md).

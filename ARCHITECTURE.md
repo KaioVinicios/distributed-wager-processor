@@ -4,7 +4,7 @@ Serviço em Go que movimenta carteiras de jogadores a partir de operações de p
 
 Este documento é **autossuficiente**: cada seção traz a decisão, o motivo e as consequências. Os detalhes operacionais (DDL, catálogos completos, parâmetros e roteiros de teste) estão nos documentos de [`docs/`](docs/), indicados em cada seção. O enunciado original está em [`CHALLENGE.md`](CHALLENGE.md).
 
-> **Como este documento foi mantido.** Ele foi escrito antes da implementação, a partir das decisões de [`docs/decisions.md`](docs/decisions.md), e revisado ao fim de cada marco contra o código. A revisão final (M10, 30/09/2026) conferiu que todo teste e toda métrica citados aqui existem no código. As limitações (§16) e o trabalho não concluído (§17) refletem o estado da entrega. Como executar e testar: [`README.md`](README.md) e [`docs/testing.md`](docs/testing.md).
+> **Como este documento foi mantido.** Ele foi escrito antes da implementação, a partir das decisões de [`docs/decisions.md`](docs/decisions.md), e revisado ao fim de cada marco contra o código. A revisão final (M10, 30/09/2026) conferiu que todo teste e toda métrica citados aqui existem no código, e o M12 acrescentou o teste de carga. As limitações (§16) e o trabalho não concluído (§17) refletem o estado da entrega. Como executar e testar: [`README.md`](README.md) e [`docs/testing.md`](docs/testing.md).
 
 ---
 
@@ -494,21 +494,30 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 16. **Um `Publish` que vence o prazo pode ser entregue depois.** Com o broker congelado, a requisição já enviada fica no buffer do socket e é processada quando o broker volta, embora o publisher já a tenha contado como falha e agendado outra tentativa. O evento chega de novo com o mesmo `eventId`, o que é o at-least-once de sempre (deduplicado pelo SNS FIFO em 5 min e pelos consumidores) (M9, R02).
 17. **Reprocessamento da DLQ só pelo produtor, localmente.** O MiniStack 1.5.18 não implementa `StartMessageMoveTask` (responde `InvalidAction`). Na AWS, a mensagem volta da DLQ com `aws sqs start-message-move-task`. Localmente, o produtor reenvia a mesma mensagem, com o mesmo `messageId`, e a inbox e a idempotência tornam o reenvio seguro ([`README.md`](README.md) §5). Não há ferramenta própria de redrive.
 18. **Réplica *unhealthy* não é reiniciada.** O `restart: on-failure` do compose traz de volta um processo que **saiu** com erro, inclusive quando um servidor HTTP para sozinho (§11). Sem um orquestrador, porém, o Docker não reinicia um container só porque o healthcheck falha.
+19. **A vazão local da outbox é a do emulador.** No teste de carga (M12), a publicação ficou em cerca de 240 eventos/s, com o MiniStack no teto de 1 CPU. Como cada operação gera 2 eventos, acima de ~120 operações/s a outbox acumula e drena depois. Nenhum evento se perde, mas o atraso cresce: o p99 foi de 0,6 s a 100 req/s e de 36 s a 200 req/s ([`docs/load-test.md`](docs/load-test.md)). A capacidade na AWS depende dos limites do SNS FIFO, não medidos aqui. O publisher envia um evento por chamada (`Publish`), e o envio em lote (`PublishBatch`) seria o primeiro ajuste, com o ganho ainda não medido.
 
 ---
 
 ## 17. Trabalho não concluído
 
-**Estado na entrega (30/09/2026):** os marcos M0 a M10 de [`docs/implementation-plan.md`](docs/implementation-plan.md) estão concluídos. Isso inclui:
+**Estado na entrega (30/09/2026):** os marcos M0 a M12 de [`docs/implementation-plan.md`](docs/implementation-plan.md) estão concluídos. Do M12, só o teste de carga foi feito. Isso inclui:
 - todos os requisitos obrigatórios e os critérios eliminatórios E1–E10;
 - os testes unitários, de integração, de múltiplas instâncias (C01–C12) e de resiliência (R01–R04);
 - os três níveis rodando no CI.
+- o teste de carga (TST-L01, M12): `make load-test` com k6 nas 3 réplicas, com a reconciliação de todas as carteiras e a drenagem da outbox como portões. Os resultados estão em [`docs/load-test.md`](docs/load-test.md).
 
 O [`docs/delivery-requirements.md`](docs/delivery-requirements.md) liga cada requisito ao teste que o comprova, e o histórico dos marcos está no [`docs/dev/diary.md`](docs/dev/diary.md).
 
 **Não feito (diferenciais opcionais do desafio):**
-- **Tracing com OpenTelemetry e dashboards** (OBS-05). Os logs trazem os identificadores de correlação, e as métricas Prometheus cobrem o catálogo pedido (§13).
-- **Teste de carga** (TST-L01), com throughput, p50/p95/p99 e atraso da outbox.
+- **Tracing com OpenTelemetry e dashboards** (OBS-05), cortados no M12 (D-21). Os logs trazem os identificadores de correlação, e as métricas Prometheus cobrem o catálogo pedido (§13).
+  - **Motivo do corte:** a versão mínima (`otelhttp` + `otelpgx`) produziria traces que terminam na requisição HTTP, justo onde o sistema é mais simples. O valor está no caminho assíncrono, e a versão útil não cabia no prazo.
+  - **Como seria feito:**
+    - `otelhttp` na borda e `otelpgx` no pool do pgx;
+    - o contexto de trace (`traceparent`) gravado em cada linha da outbox, na mesma transação do evento;
+    - o publisher abriria o span de publicação a partir dessa coluna e propagaria o contexto como atributo de mensagem do SNS, para os consumidores dos eventos;
+    - o consumidor da fila de apostas continuaria o trace do provedor quando a mensagem trouxesse o contexto nos atributos;
+    - o worker de referências ligaria o seu span ao da transação que destravou a pendência;
+    - exporter OTLP para um Jaeger no compose.
 - **Ledger de partidas dobradas** (LED-07). O ledger de entrada simples com cadeia verificável foi uma escolha (§3.3).
 
 **Fora do escopo, com o que faltaria para produção:**
@@ -535,8 +544,9 @@ O [`docs/delivery-requirements.md`](docs/delivery-requirements.md) liga cada req
 | [`docs/getting-started.md`](docs/getting-started.md) | Guia para iniciantes: o projeto em linguagem simples, como subir e um roteiro de validação com payloads e respostas esperadas |
 | [`README.md`](README.md) | Como executar, configurar e testar: pré-requisitos, variáveis, filas, migrations, identidades de teste e exemplos |
 | [`docs/testing.md`](docs/testing.md) | Preparação das dependências dos testes, integração, múltiplas instâncias, simulações de falha e build tags |
+| [`docs/load-test.md`](docs/load-test.md) | Teste de carga: comando, metodologia, ambiente e resultados (D-21) |
 | [`api/openapi.yaml`](api/openapi.yaml) · [`api/events.yaml`](api/events.yaml) | Contratos da API HTTP e dos eventos de saída, validados nos testes |
-| [`docs/decisions.md`](docs/decisions.md) | Registro detalhado de decisões (D-01 a D-20) |
+| [`docs/decisions.md`](docs/decisions.md) | Registro detalhado de decisões (D-01 a D-21) |
 | [`docs/data-model.md`](docs/data-model.md) | Schema, constraints, triggers, roles, consultas críticas e migrations |
 | [`docs/transaction-lifecycle.md`](docs/transaction-lifecycle.md) | Máquina de estados, regras por tipo, referências, catálogo de códigos e pipelines |
 | [`docs/messaging.md`](docs/messaging.md) | Filas, consumidor, DLQ, outbox e contratos dos eventos |
