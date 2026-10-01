@@ -289,6 +289,12 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
   - os testes do `sqsconsumer` usam um provedor aleatório por teste, então ali o token é lido como o id do provedor (`trustingAuth`), e o IdP real fica no A06 e nos testes de `test/integration` e e2e.
 - **Evidência:** A05 reproduz a auditoria (vermelho antes, verde depois; sem a comparação do provedor, volta a falhar), A06 com o Keycloak real, U33–U35, I14 com um token próprio no SQS. Spec: [specs/2026-10-01-sqs-provider-auth-design.md](specs/2026-10-01-sqs-provider-auth-design.md); plano: [plans/2026-10-01-sqs-provider-auth.md](plans/2026-10-01-sqs-provider-auth.md).
 
+## 01/10/2026 (qui): R01 intermitente
+
+- **Sintoma:** na terceira de três rodadas completas da suíte, pedidas antes dos commits da D-23, o `TestPostgresOutage` (R01) acusou 4 respostas 200 "durante a queda". As outras 5 execuções do dia tinham passado.
+- **Causa:** o teste marcava o fim da janela da queda depois do `resume()`. Mas o `docker compose unpause` libera o PostgreSQL antes de retornar, e requisições que esperavam o banco (0,5 a 4,7 s, todas liberadas no mesmo instante) terminaram com 200 nesse intervalo. O 200 é legítimo, e o produto se comportou como esperado. Um atraso artificial de 1,5 s depois do `resume()` reproduziu o sintoma em toda execução (32 respostas).
+- **Correção:** o fim da janela passou a ser marcado imediatamente antes do `resume()`. Com o mesmo atraso, o R01 passou, e depois passou 10 vezes seguidas sem ele ([spec](specs/2026-10-01-r01-resume-window-design.md) → [plano](plans/2026-10-01-r01-resume-window.md)).
+
 ## Onde paramos
 
 - **M12 concluído; D-23 (identidade do provedor no SQS) em 01/10 (commits aguardando autorização).** Todos os marcos M0–M12 estão fechados. Do M12, só o teste de carga foi feito, e o OpenTelemetry e o dashboard foram cortados (D-21). O dashboard entrou em 01/10 (D-22, commits aguardando autorização). As execuções do M12 recriaram o compose com `down -v`, então o banco de desenvolvimento só tem os dados da última execução de carga.
