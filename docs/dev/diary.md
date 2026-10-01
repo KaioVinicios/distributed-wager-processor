@@ -243,6 +243,12 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
 
   Cada correção foi validada aplicando o diff no clone e rodando os exemplos de novo.
 
+## 30/09/2026 (qua): I05a intermitente no CI
+
+- **Sintoma:** o job de integração falhava na primeira execução e passava no re-run, sempre no `TestOutboxConcurrentPublishers` (41 de 200 eventos "não entregues").
+- **Causa:** o log do MiniStack mostrou os 200 eventos na fila de auditoria em cerca de 1 s. Um lote recebido e não registrado pelo `testkit.Audit` (o único aviso do SDK, às 22:18:36, é de uma resposta lida pela metade, e o SDK repete sem avisar) ficava em voo pelos 30 s de visibility, e o grupo FIFO junto, além do `AuditTimeout` de 10 s. Não reproduz localmente.
+- **Correção:** o `Audit` recebe com visibility de 2 s e guarda cada mensagem uma vez pelo `MessageId`. Nada muda fora do `testkit` ([spec](specs/2026-09-30-audit-lost-receive-design.md) → [plano](plans/2026-09-30-audit-lost-receive.md)).
+
 ## Onde paramos
 
 - **M11 concluído (commits aguardando autorização).** Todos os marcos M0–M11 estão fechados. Depois do M11, o ambiente de desenvolvimento volta a subir a partir do repositório original (o `aws-init` regenera o `.local/aws/credentials`). Próximo passo: **M12, opcionais**, se houver folga (teste de carga, OpenTelemetry, dashboard).

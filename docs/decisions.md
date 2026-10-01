@@ -384,6 +384,11 @@ Nesses casos a operação é persistida como `PENDING_REFERENCE` e o evento `Wag
      - os gauges de backlog são atualizados pelo publisher, no máximo 1×/s.
 - **Tópico:** o ARN é resolvido no start. `sts:GetCallerIdentity` dá a partição e a conta, o ARN é montado com `AWS_REGION` e `SNS_EVENTS_TOPIC_NAME`, e `sns:GetTopicAttributes` confirma que o tópico existe (fail fast). A política do serviço ganha `sns:GetTopicAttributes` no recurso do tópico. O SNS não entra no readiness: com o broker fora, o HTTP continua e a outbox acumula.
 - **Contrato formal:** [`api/events.yaml`](../api/events.yaml) define o envelope e os 4 eventos v1 com `additionalProperties: false`. Os testes validam contra ele toda mensagem lida da fila de auditoria.
+- **Leitura da auditoria nos testes (achado do CI em 30/09, [spec](dev/specs/2026-09-30-audit-lost-receive-design.md)):**
+  - o `testkit.Audit` recebe com `VisibilityTimeout` de 2 s, para que um lote recebido e não registrado (resposta perdida e repetida pelo SDK) ou não apagado volte dentro do `AuditTimeout`, em vez de bloquear o grupo FIFO por 30 s;
+  - cada mensagem SQS é guardada uma vez, pelo `MessageId`: uma reentrega do broker não conta como nova entrega, mas uma republicação que passe pela deduplicação do SNS é outra mensagem e conta;
+  - as falhas por entrada do `DeleteMessageBatch` não são erro, porque a mensagem volta e é apagada no receive seguinte;
+  - a fila `wallet-events-audit.fifo` e o consumidor (D-12) não mudam.
 - **Garantias:**
   - A entrega é at-least-once e o `eventId` é preservado nas republicações.
   - Os consumidores devem deduplicar por `eventId` e ordenar por `walletVersion`.

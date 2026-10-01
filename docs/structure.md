@@ -223,7 +223,7 @@ pda/
 │   │   ├── contract.go                     # validação de req/resp contra api/openapi.yaml (kin-openapi)
 │   │   ├── event_contract.go               # validação dos eventos contra api/events.yaml (M4)
 │   │   ├── events.go                       # tópico + fila de auditoria isolados, com policy e assinatura raw (M4)
-│   │   ├── audit.go                        # coletor da fila de auditoria: WaitFor por eventId, todas as entregas (M4)
+│   │   ├── audit.go                        # coletor da fila de auditoria: WaitFor por eventId, cada mensagem uma vez (MessageId), visibility curto (M4, CI 30/09)
 │   │   ├── sqs.go                          # envelope WagerTransactionRequested, envio, leitura da DLQ, profundidade e fila drenada (M5)
 │   │   ├── iam.go                          # políticas de deploy/aws/policies renderizadas e usuários IAM do teste (I04f, M5)
 │   │   ├── assert.go                       # AssertWalletConsistent (test-plan §6, itens 1–8), OutboxProblems, OutboxPayloads, SnapshotCounts, Eventually

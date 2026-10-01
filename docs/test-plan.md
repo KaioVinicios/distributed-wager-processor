@@ -97,6 +97,7 @@ O isolamento é por banco porque o ledger é append-only e bloqueia `TRUNCATE`. 
 | `SHUTDOWN_TIMEOUT` | 20 s | 5 s | 5 s |
 | `DB_LOCK_TIMEOUT` | 5 s | 2 s | 2 s |
 | `HTTP_REQUEST_TIMEOUT` (M9) | 10 s | 10 s | 5 s |
+| Visibility do receive do `testkit.Audit` (não é variável do serviço) | — | 2 s | 2 s |
 
 ### 3.4 Cluster e2e (`testkit.Cluster`)
 
