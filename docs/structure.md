@@ -199,8 +199,13 @@ pda/
 │   ├── keycloak/
 │   │   ├── realm-pda.json                  # clients, roles, mappers provider_id e audience (D-07)
 │   │   └── realm-other.json                # realm de teste para iss/chaves inválidos
-│   └── postgres/
-│       └── 01-roles.sh                     # cria pda_owner e pda_app (docker-entrypoint-initdb.d)
+│   ├── postgres/
+│   │   └── 01-roles.sh                     # cria pda_owner e pda_app (docker-entrypoint-initdb.d)
+│   ├── prometheus/
+│   │   └── prometheus.yml ⭐               # coleta o :9090 das 3 réplicas a cada 5 s (D-22)
+│   └── grafana/ ⭐                         # dashboard (D-22)
+│       ├── provisioning/                   # datasource Prometheus e provider de dashboards por arquivo
+│       └── dashboards/pda.json             # "PDA — visão geral": 35 painéis; a interface não salva alterações
 │
 ├── scripts/
 │   ├── get-token.sh                        # obtém token client_credentials (fluxos do README)

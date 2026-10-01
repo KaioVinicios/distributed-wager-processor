@@ -83,6 +83,8 @@ Logs (`log/slog`), HTTP (`net/http`), JSON (`encoding/json`), hash (`crypto/sha2
 | `migrate/migrate` | `v4.20.1` | Serviço `migrate` do compose e comandos up/down do README |
 | `golangci/golangci-lint` | `v2.14.0` | Lint e formatação sem instalação local |
 | `grafana/k6` | `2.3.0` | Teste de carga (serviço `k6`, profile `load`; D-21) |
+| `prom/prometheus` | `v3.15.0` | Coleta das métricas das 3 réplicas para o dashboard (serviço `prometheus`; D-22) |
+| `grafana/grafana` | `13.2.3` | Dashboard provisionado (serviço `grafana`, `localhost:3000`; D-22) |
 
 A fixação é por tag. Se houver tempo no M12, as tags podem ser trocadas por digest (`@sha256:…`) para garantir que a imagem não mude.
 
@@ -335,7 +337,7 @@ fmt-check:
 | `testify` | O desafio pede `testing`, e as asserções ficam em `test/testkit` |
 | `viper` | Config só por ambiente; `caarlos0/env` é menor e tipado |
 | `zap`, `zerolog` | `log/slog` da stdlib atende logs JSON estruturados |
-| OpenTelemetry | Diferencial opcional, cortado no M12: sem propagação pela mensageria, o trace terminaria na requisição HTTP (D-21) |
+| OpenTelemetry | Diferencial opcional, cortado no M12: sem propagação pela mensageria, o trace terminaria na requisição HTTP (D-21). O dashboard entrou sem ele, sobre as métricas Prometheus (D-22) |
 | `swaggo/swag` (*code-first*) | Anotações espalhadas pelos handlers. Com os contratos já decididos, faz mais sentido o *design-first* (D-20) |
 | `oapi-codegen` | Código gerado é exceção ao TDD e acopla os handlers ao gerador. DTOs escritos à mão + validação de contrato nos testes dão a mesma garantia |
 | Redoc | Não permite testar as rotas pela página (sem *try it out*) |

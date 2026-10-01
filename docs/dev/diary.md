@@ -262,9 +262,17 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
 - **Gargalo:** a publicação da outbox, a ~240 eventos/s. Uma execução de observação com `docker stats` mostrou o MiniStack no teto de 1 CPU durante toda a carga e a drenagem. A conta de acúmulo e drenagem (~160 eventos/s acumulados, ~40 s para drenar) bateu com a medida. Virou a limitação 19 do `ARCHITECTURE.md` §16.
 - **Achado:** recriar `.local/load` entre execuções deixava o bind mount do Docker Desktop defasado, e o k6 às vezes não gravava a saída: 15 falhas em 20 numa reprodução isolada, 0 em 30 com o diretório estável. O script passou a apagar só os arquivos ([spec](specs/2026-09-30-m12-load-test-design.md) → [plano](plans/2026-09-30-m12-load-test.md) → [relatório](../load-test.md)).
 
+## 01/10/2026 (qui): dashboard (D-22)
+
+- **Escopo:** o autor reabriu o dashboard cortado na D-21, desde que não dependesse de telemetria nova. As métricas Prometheus do M7 já bastavam: o trabalho virou só configuração (Prometheus 3.15 + Grafana 13.2 no compose, dashboard de 35 painéis provisionado por arquivo). Sem Go novo, a mudança entrou como exceção do §4.4 (`deploy/prometheus/*`, `deploy/grafana/*`), aprovada pelo autor, e não passou por spec e plano.
+- **Achado 1, gauges compartilhados:** `outbox_pending_events`, `outbox_oldest_pending_age_seconds`, `sqs_dlq_depth` e `reference_pending_transactions` são lidos do banco ou da fila por cada réplica. Somar triplicaria o valor, então os painéis usam `max`.
+- **Achado 2, primeiro incremento invisível:** um contador com label nasce já no primeiro incremento, e `rate` e `increase` não o enxergam. Com 3 respostas 401 numa réplica, `increase` dava 0. Esconderia a primeira rejeição, o primeiro envio à DLQ ou a primeira divergência de cada réplica. A flag `created-timestamp-zero-ingestion` do Prometheus resolveu sem mexer no Go (`increase` passou a 3).
+- **Achado 3, carga e aquecimento:** as primeiras execuções de `make load-test` depois de o Docker Desktop iniciar saíram muito piores que o registrado. Um A/B sem o Prometheus e o Grafana melhorou, mas a execução seguinte, com os dois, foi a melhor das três (p50/p95/p99 de 3,5/12,3/55,9 ms, 0 perdidas, drenagem em 2,1 s). Era o aquecimento da VM ([`load-test.md`](../load-test.md) §3).
+- **Validação:** compose saudável, 3 alvos `up`, as 42 consultas avaliadas sem erro depois da carga, a consulta pelo Grafana (`/api/ds/query`) e uma captura do dashboard no Chrome headless.
+
 ## Onde paramos
 
-- **M12 concluído (commits aguardando autorização).** Todos os marcos M0–M12 estão fechados. Do M12, só o teste de carga foi feito, e o OpenTelemetry e o dashboard foram cortados (D-21). As execuções do M12 recriaram o compose com `down -v`, então o banco de desenvolvimento só tem os dados da última execução de carga.
+- **M12 concluído (commits aguardando autorização).** Todos os marcos M0–M12 estão fechados. Do M12, só o teste de carga foi feito, e o OpenTelemetry e o dashboard foram cortados (D-21). O dashboard entrou em 01/10 (D-22, commits aguardando autorização). As execuções do M12 recriaram o compose com `down -v`, então o banco de desenvolvimento só tem os dados da última execução de carga.
 - **Pendências em aberto:**
   - confirmar o horário exato da entrega (assumido 01/10);
   - **os 3 minors do M0: resolvidos em 30/09** ([spec](specs/2026-09-30-m0-minors-design.md));

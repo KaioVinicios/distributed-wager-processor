@@ -49,7 +49,7 @@ flowchart LR
 
   O domínio não conhece Fx, HTTP, SQS nem o driver do banco, e isso é verificado por lint (`depguard`) e por teste. Detalhes em [`docs/structure.md`](docs/structure.md).
 
-**Stack:** Go 1.27.1, Uber Fx, `net/http`, PostgreSQL 18 com `pgx/v5`, Keycloak 26, SQS e SNS no MiniStack, `golang-migrate`, `log/slog` e Prometheus. Versões e ferramentas em [`docs/stack.md`](docs/stack.md).
+**Stack:** Go 1.27.1, Uber Fx, `net/http`, PostgreSQL 18 com `pgx/v5`, Keycloak 26, SQS e SNS no MiniStack, `golang-migrate`, `log/slog`, Prometheus e Grafana (dashboard). Versões e ferramentas em [`docs/stack.md`](docs/stack.md).
 
 ---
 
@@ -399,7 +399,16 @@ O catálogo está completo desde o M7. Os gauges da outbox e o de referências s
 
 Métricas auxiliares do consumidor (`sqs_messages_received_total`, `sqs_receive_errors_total`) estão em [`docs/messaging.md`](docs/messaging.md) §8.
 
-### 13.3 Health checks
+### 13.3 Dashboard (D-22)
+
+O compose sobe um **Prometheus** (`localhost:9090`), que coleta as 3 réplicas a cada 5 s, e um **Grafana** (<http://localhost:3000>, acesso anônimo de leitura). O dashboard `PDA — visão geral` é a página inicial do Grafana. Datasource e dashboard são provisionados de `deploy/grafana/`, sem passo manual.
+
+- **O que mostra:** 35 painéis em seis grupos: visão geral, operações (resultados por status, códigos de rejeição, latência, carga por réplica, duplicatas, conflitos), outbox (pendentes, idade do mais antigo, atraso, publicações, falhas e leases retomados), SQS (desfechos, retries, DLQ, latência, erros), referências pendentes e reconciliação, acesso e HTTP. Cada painel descreve a métrica de origem.
+- **Agregação:** contadores e histogramas somados entre réplicas. Os gauges lidos do banco ou da fila, que são iguais nas 3 réplicas, usam `max`.
+- **Primeiro incremento visível:** o Prometheus ingere o instante de criação de cada contador como uma amostra 0 (`created-timestamp-zero-ingestion`), então a primeira rejeição ou o primeiro envio à DLQ de uma réplica aparecem no `rate`.
+- **Limites:** os percentis vêm de histogramas de 12 buckets, então são aproximados. Não há alertas, e o histórico do Prometheus se perde num `docker compose down`.
+
+### 13.4 Health checks
 
 - `GET /health/live`: o processo está de pé.
 - `GET /health/ready`: PostgreSQL (ping) **e** SQS (`GetQueueAttributes`), executados em paralelo, com 2 s de timeout cada, mesmo que a dependência ignore o cancelamento. Responde 503 enquanto uma dependência estiver indisponível.
@@ -509,7 +518,7 @@ Pontos em que o desafio deixa margem, e a leitura adotada:
 O [`docs/delivery-requirements.md`](docs/delivery-requirements.md) liga cada requisito ao teste que o comprova, e o histórico dos marcos está no [`docs/dev/diary.md`](docs/dev/diary.md).
 
 **Não feito (diferenciais opcionais do desafio):**
-- **Tracing com OpenTelemetry e dashboards** (OBS-05), cortados no M12 (D-21). Os logs trazem os identificadores de correlação, e as métricas Prometheus cobrem o catálogo pedido (§13).
+- **Tracing com OpenTelemetry** (metade do OBS-05), cortado no M12 (D-21). Os logs trazem os identificadores de correlação, e as métricas Prometheus cobrem o catálogo pedido (§13). A outra metade do OBS-05, o dashboard, foi entregue em 01/10 (D-22, §13.3).
   - **Motivo do corte:** a versão mínima (`otelhttp` + `otelpgx`) produziria traces que terminam na requisição HTTP, justo onde o sistema é mais simples. O valor está no caminho assíncrono, e a versão útil não cabia no prazo.
   - **Como seria feito:**
     - `otelhttp` na borda e `otelpgx` no pool do pgx;
@@ -546,7 +555,7 @@ O [`docs/delivery-requirements.md`](docs/delivery-requirements.md) liga cada req
 | [`docs/testing.md`](docs/testing.md) | Preparação das dependências dos testes, integração, múltiplas instâncias, simulações de falha e build tags |
 | [`docs/load-test.md`](docs/load-test.md) | Teste de carga: comando, metodologia, ambiente e resultados (D-21) |
 | [`api/openapi.yaml`](api/openapi.yaml) · [`api/events.yaml`](api/events.yaml) | Contratos da API HTTP e dos eventos de saída, validados nos testes |
-| [`docs/decisions.md`](docs/decisions.md) | Registro detalhado de decisões (D-01 a D-21) |
+| [`docs/decisions.md`](docs/decisions.md) | Registro detalhado de decisões (D-01 a D-22) |
 | [`docs/data-model.md`](docs/data-model.md) | Schema, constraints, triggers, roles, consultas críticas e migrations |
 | [`docs/transaction-lifecycle.md`](docs/transaction-lifecycle.md) | Máquina de estados, regras por tipo, referências, catálogo de códigos e pipelines |
 | [`docs/messaging.md`](docs/messaging.md) | Filas, consumidor, DLQ, outbox e contratos dos eventos |

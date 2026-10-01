@@ -28,7 +28,8 @@ Decisões técnicas e interpretações do [`CHALLENGE.md`](../CHALLENGE.md) adot
 | D-18 | Observabilidade | slog JSON; `/metrics` em porta administrativa separada | ⚙️ |
 | D-19 | Estratégia de testes | Build tags + infraestrutura do compose; e2e com 3 processos; injeção de falhas por build tag | 🗳️ |
 | D-20 | Documentação da API | OpenAPI 3.0.3 *design-first* em `api/openapi.yaml`, Swagger UI em `/docs`, contrato validado nos testes (kin-openapi) | 🗳️ |
-| D-21 | Teste de carga | k6 2.3.0 em Docker (profile `load` do compose), modelo aberto com taxa fixa, consistência como portão; OpenTelemetry e dashboard fora | 🗳️ |
+| D-21 | Teste de carga | k6 2.3.0 em Docker (profile `load` do compose), modelo aberto com taxa fixa, consistência como portão; OpenTelemetry fora (o dashboard entrou depois, na D-22) | 🗳️ |
+| D-22 | Dashboard | Prometheus 3.15 + Grafana 13.2 no compose, só configuração (sem Go novo); dashboard provisionado por arquivo; `max` nos gauges compartilhados; *start timestamps* para não perder o primeiro incremento | 🗳️ |
 
 ---
 
@@ -549,4 +550,27 @@ Decidida no M12 (spec [`dev/specs/2026-09-30-m12-load-test-design.md`](dev/specs
   - alguma carteira der `consistent=false` na reconciliação feita depois da carga.
 
   A latência é medida, não é portão.
-- **Fora:** o tracing com OpenTelemetry (OBS-05) e o dashboard. A versão mínima do tracing, sem propagação pela outbox, pelo SNS e pelo SQS, terminaria na requisição HTTP, justo onde o sistema é mais simples, e a versão útil não cabe no prazo. O esboço fica no `ARCHITECTURE.md` §17.
+- **Fora:** o tracing com OpenTelemetry (OBS-05) e, no M12, o dashboard (entregue depois, em 01/10, pela D-22). A versão mínima do tracing, sem propagação pela outbox, pelo SNS e pelo SQS, terminaria na requisição HTTP, justo onde o sistema é mais simples, e a versão útil não cabe no prazo. O esboço fica no `ARCHITECTURE.md` §17.
+
+---
+
+## D-22 — Dashboard ⭐ 🗳️ [OBS-05]
+
+Decidida em 01/10/2026, depois do M12. O autor reabriu o dashboard cortado na D-21 com uma condição: não depender de telemetria nova. A condição vale porque as métricas Prometheus do M7 já cobrem o catálogo, então o trabalho é só configuração.
+
+- **Peças:** dois serviços no `docker-compose.yml`, os dois sobem no `docker compose up`:
+  - `prometheus` (`prom/prometheus:v3.15.0`, `localhost:9090`) coleta o `:9090` administrativo das 3 réplicas a cada 5 s (`deploy/prometheus/prometheus.yml`), com a label `instance` reduzida ao nome do serviço (`app-1`…`app-3`);
+  - `grafana` (`grafana/grafana:13.2.3`, `localhost:3000`) com datasource e dashboard provisionados por arquivo (`deploy/grafana/`). O acesso anônimo é de leitura (`Viewer`), e o dashboard `PDA — visão geral` é a página inicial. Alterações feitas na interface não são salvas: o JSON versionado é a fonte.
+- **Painéis:** 35, em seis grupos: visão geral (réplicas no ar, operações/s, rejeições/s, outbox pendente, DLQ e divergências de reconciliação), operações, outbox, consumidor SQS, referências pendentes, e reconciliação, acesso e HTTP. Cobrem as métricas pedidas no §12 do desafio. Um filtro `Réplica` restringe tudo a uma ou mais instâncias.
+- **Agregação entre réplicas:**
+  - contadores e histogramas são somados (`sum by (…) (rate(…))`, e `histogram_quantile` sobre a soma dos buckets);
+  - os gauges `outbox_pending_events`, `outbox_oldest_pending_age_seconds`, `sqs_dlq_depth` e `reference_pending_transactions` vêm do banco ou da fila, iguais em todas as réplicas. Por isso usam `max`, e somar triplicaria o valor.
+- **Primeiro incremento:** um contador com label só passa a existir no primeiro incremento. Sem amostra anterior, `rate` e `increase` não enxergam esse incremento, então a primeira rejeição, o primeiro envio à DLQ ou a primeira reconciliação divergente de cada réplica sumiriam do painel. O Prometheus roda com `--enable-feature=created-timestamp-zero-ingestion`: a coleta passa a usar protobuf, e o `client_golang` informa o instante de criação de cada contador, que vira uma amostra 0. Antes da flag, 3 respostas 401 numa réplica nova davam `increase` 0. Depois, 3.
+- **Percentis:** os histogramas têm 12 buckets exponenciais. Os percentis do dashboard são interpolações para acompanhar tendência, e a descrição de cada painel diz isso. Os percentis exatos do teste de carga continuam vindo do SQL (D-21).
+- **Processo:** sem Go novo. Compose, YAML de configuração e o JSON do dashboard entram como exceção do §4.4 do [`development-workflow.md`](development-workflow.md) (`deploy/prometheus/*`, `deploy/grafana/*`), com esta validação:
+  - `docker compose up --build --wait` com todos os serviços saudáveis;
+  - os 3 alvos `up` no Prometheus;
+  - as 42 consultas do dashboard avaliadas no Prometheus depois de `make load-test`, sem erro;
+  - uma consulta pelo Grafana (`/api/ds/query`) e uma captura do dashboard.
+- **Custo na carga:** a execução canônica (100 req/s, compose recém-criado) com Prometheus e Grafana de pé repetiu o resultado da D-21: p50/p95/p99 de 3,5/12,3/55,9 ms, 0 iterações perdidas, outbox drenada em 2,1 s. As execuções logo depois de o Docker Desktop iniciar saíram piores, com e sem os dois serviços, e melhoraram a cada repetição. A diferença era o aquecimento da VM, não o dashboard ([`load-test.md`](load-test.md) §3).
+- **Fora:** alertas (por exemplo, sobre `sqs_dlq_depth` ou divergências), persistência do histórico do Prometheus entre `docker compose down` e o tracing (OBS-05 continua parcial; esboço no `ARCHITECTURE.md` §17).

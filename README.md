@@ -34,8 +34,8 @@ Serviço em Go que movimenta carteiras de jogadores a partir de operações de p
 | `make`, `curl` | Qualquer | Atalhos do `Makefile` e exemplos |
 | `jq`, `uuidgen` | Qualquer | Só nos exemplos da §8 |
 
-- **Portas livres no host:** `5432` (PostgreSQL), `8080` (Keycloak), `4566` (MiniStack), `8081`–`8083` (API das réplicas) e `9091`–`9093` (métricas).
-- **Memória:** o conjunto usa cerca de 1,2 GB depois de subir (o Keycloak, com ~830 MB, é o maior). Reserve 2 GB para o Docker.
+- **Portas livres no host:** `5432` (PostgreSQL), `8080` (Keycloak), `4566` (MiniStack), `8081`–`8083` (API das réplicas), `9091`–`9093` (métricas), `9090` (Prometheus) e `3000` (Grafana).
+- **Memória:** o conjunto usa cerca de 2 GB depois de subir e rodar uma carga (Keycloak ~1 GB e Grafana ~650 MB são os maiores). Reserve 3 GB para o Docker.
 - **Nada mais precisa ser instalado:** o lint roda pela imagem do `golangci-lint`, as migrations pela imagem do `migrate` e a AWS CLI pela imagem `amazon/aws-cli`.
 
 ---
@@ -77,6 +77,8 @@ curl -s localhost:8081/health/ready
 | `postgres` | `localhost:5432` (banco `pda`) | Fonte da verdade: carteiras, transações, ledger, inbox e outbox |
 | `keycloak` | `localhost:8080` (console: `admin` / `admin-local`) | IdP OIDC; emite tokens `client_credentials` |
 | `ministack` | `localhost:4566` | SQS e SNS FIFO, com as políticas IAM avaliadas (`AUTH=true`) |
+| `prometheus` | <http://localhost:9090> | Coleta o `/metrics` das 3 réplicas a cada 5 s (D-22) |
+| `grafana` | <http://localhost:3000> (anônimo, só leitura; `admin` / `admin` para editar) | Dashboard `PDA — visão geral`, provisionado de `deploy/grafana/` ([`ARCHITECTURE.md`](ARCHITECTURE.md) §13.3) |
 | `migrate`, `aws-init` | — | Tarefas únicas da subida (migrations; filas, tópico e IAM) |
 | `k6` (profile `load`) | — | Gerador do teste de carga. Só roda com `make load-test`, nunca no `docker compose up` ([`docs/load-test.md`](docs/load-test.md)) |
 
@@ -459,7 +461,9 @@ for p in 9091 9092 9093; do curl -s localhost:$p/metrics | grep '^wager_transact
 # …
 ```
 
-Cada réplica expõe só os próprios contadores, e a mensagem do SQS e o worker caem em qualquer uma, por isso o laço lê as 3. Num Prometheus, some por rótulo (`sum by (channel, kind, outcome)`).
+Cada réplica expõe só os próprios contadores, e a mensagem do SQS e o worker caem em qualquer uma, por isso o laço lê as 3. No Prometheus do compose (<http://localhost:9090>), some por rótulo (`sum by (channel, kind, outcome)`).
+
+**Dashboard:** <http://localhost:3000> abre o `PDA — visão geral` no Grafana, já somando as 3 réplicas: resultados por status, duplicatas, retries, DLQ, conflitos, atraso da outbox, latências e divergências de reconciliação. Com `make load-test` rodando, os painéis se mexem em tempo real (atualização a cada 5 s). Como o JSON versionado é a fonte, alterações feitas na interface não são salvas.
 
 - **Fila de auditoria:** é FIFO, então entrega primeiro os eventos mais antigos do ambiente. Com 3 réplicas publicando, a ordem entre eventos da mesma carteira **não é estrita** (um evento da BET pode chegar antes dos da abertura); para o saldo, vale o `walletVersion` ([`docs/messaging.md`](docs/messaging.md) §7). Uma mensagem lida fica invisível por 30 s e depois volta. Os contratos dos eventos estão em [`api/events.yaml`](api/events.yaml) e em [`docs/messaging.md`](docs/messaging.md) §6–§7.
 - **Métricas e logs:** o catálogo de métricas está no [`ARCHITECTURE.md`](ARCHITECTURE.md) §13.2. Os logs são JSON: `docker compose logs -f app-1`.

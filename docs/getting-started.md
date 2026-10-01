@@ -383,6 +383,8 @@ O contrato formal dos eventos está em [`api/events.yaml`](../api/events.yaml).
 for p in 9091 9092 9093; do curl -s localhost:$p/metrics | grep '^wager_transactions_total'; done
 ```
 
+**Dashboard:** abra <http://localhost:3000>. O Grafana mostra as métricas das 3 réplicas somadas em gráficos (operações por status, outbox, fila, reconciliação), sem login. Depois de cada passo deste roteiro, os contadores sobem em até 5 s.
+
 ---
 
 ## 6. Testes automáticos
@@ -411,7 +413,7 @@ ok  	github.com/KaioVinicios/pda/internal/domain/wallet	0.221s
 
 | Sintoma | O que fazer |
 | --- | --- |
-| `address already in use` ao subir | Alguma porta está ocupada (`5432`, `8080`, `4566`, `8081`–`8083`, `9091`–`9093`). Pare o outro programa |
+| `address already in use` ao subir | Alguma porta está ocupada (`5432`, `8080`, `4566`, `8081`–`8083`, `9091`–`9093`, `9090`, `3000`). Pare o outro programa |
 | 401 com um token que funcionava | O token expirou (5 min). Rode `PROVIDER_TOKEN=$(scripts/get-token.sh provider-a)` de novo |
 | 409 `WALLET_ALREADY_EXISTS` no passo 1 | O jogador já tem carteira. Gere outro: `PLAYER=$(uuidgen \| tr 'A-Z' 'a-z')` |
 | As réplicas reiniciam sem parar depois de recriar o MiniStack | `docker compose up aws-init && docker compose restart app-1 app-2 app-3` |

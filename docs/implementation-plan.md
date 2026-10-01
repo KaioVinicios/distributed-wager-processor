@@ -265,7 +265,7 @@ Só se M9–M11 estiverem verdes. Por ordem: teste de carga (test-plan §9), tra
 - **Escopo, por decisão do autor (D-21):**
   - o teste de carga entra;
   - o OpenTelemetry fica fora, porque sem propagação pela mensageria o trace terminaria na requisição HTTP, e a versão útil não cabia no prazo. O esboço está no `ARCHITECTURE.md` §17;
-  - o dashboard fica fora.
+  - o dashboard fica fora (reaberto e entregue em 01/10 pela D-22, só com configuração: Prometheus + Grafana).
 - **Entregue:**
   - `make load-test`: o `scripts/load-test.sh` roda o serviço `k6` do compose (`grafana/k6:2.3.0`, profile `load`) com o `test/load/wager.js`;
   - modelo aberto (`constant-arrival-rate`) nas 3 réplicas, com a mistura de 70% BET, 25% WIN e 5% REFUND desenhada para não gerar rejeições por acaso;
@@ -284,7 +284,7 @@ Só se M9–M11 estiverem verdes. Por ordem: teste de carga (test-plan §9), tra
   - o `setup()` espera a outbox drenar antes de abrir a janela, para que a métrica e o SQL contem os mesmos eventos (as contagens bateram em todas as execuções);
   - a amostragem do `docker stats` degrada a medida: a execução de observação perdeu 394 iterações, contra 24 na da tabela. Ela foi usada só para atribuir o gargalo.
 
-**Cobre:** TST-L01 (OBS-05 cortado). Spec: [`dev/specs/2026-09-30-m12-load-test-design.md`](dev/specs/2026-09-30-m12-load-test-design.md) · plano: [`dev/plans/2026-09-30-m12-load-test.md`](dev/plans/2026-09-30-m12-load-test.md) · relatório: [`load-test.md`](load-test.md).
+**Cobre:** TST-L01. OBS-05: o tracing foi cortado e o dashboard foi entregue em 01/10 (D-22). Spec: [`dev/specs/2026-09-30-m12-load-test-design.md`](dev/specs/2026-09-30-m12-load-test-design.md) · plano: [`dev/plans/2026-09-30-m12-load-test.md`](dev/plans/2026-09-30-m12-load-test.md) · relatório: [`load-test.md`](load-test.md).
 
 ---
 
@@ -294,7 +294,7 @@ Cortar **de cima para baixo**. Cada item cortado vai para "trabalho não conclu�
 
 | # | Corte | Impacto | Substituto |
 | --- | --- | --- | --- |
-| 1 | M12 (carga, OTel, dashboard). Usado no M12: OTel e dashboard cortados (D-21), carga entregue | Só diferenciais | — |
+| 1 | M12 (carga, OTel, dashboard). Usado no M12: OTel e dashboard cortados (D-21), carga entregue. O dashboard voltou em 01/10 (D-22) | Só diferenciais | — |
 | 2 | R02 e R04 | Menos evidência de resiliência | R01 e R03 continuam |
 | 3 | Realm `other` e `no-audience-client` | Menos casos negativos de token | Assinatura forjada e expiração continuam |
 | 4 | Lotes agrupados por `MessageGroupId` no consumidor | Menos paralelismo por instância | Processar em sequência por poller, que continua correto |
