@@ -197,14 +197,17 @@ func TestPostgresOutage(t *testing.T) {
 	if got := consumer.MetricValue(t, "sqs_messages_received_total"); got != receivedPaused {
 		t.Fatalf("the paused consumer received %d messages during the outage, want none", got-receivedPaused)
 	}
+	// The window ends when the resume begins: docker compose unpause releases
+	// the database before it returns, and a request that was waiting for it
+	// may then answer 200 legitimately (spec of the R01 window, 01/10).
+	resuming := time.Now()
 	resume()
-	resumedAt := time.Now()
 	time.Sleep(time.Second) // traffic after the outage, not a synchronization
 	stopTraffic()
 
 	var during int
 	for _, c := range calls {
-		if c.at.Before(pausedAt.Add(time.Second)) || c.at.After(resumedAt) {
+		if c.at.Before(pausedAt.Add(time.Second)) || !c.at.Before(resuming) {
 			continue
 		}
 		during++
