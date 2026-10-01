@@ -10,7 +10,7 @@ GOVULNCHECK_VERSION ?= v1.8.0
 COMPOSE ?= docker compose
 INFRA_SERVICES := postgres keycloak ministack
 
-.PHONY: up down infra-up migrate-up migrate-down fmt fmt-check lint vet vuln tidy-check go-version-check test test-integration test-e2e check
+.PHONY: up down infra-up migrate-up migrate-down fmt fmt-check lint vet vuln tidy-check go-version-check test test-integration test-e2e check load-test
 
 up:
 	$(COMPOSE) up --build
@@ -74,5 +74,10 @@ test-integration: infra-up
 # (test-plan §3.4). -p 1: the package drives the processes of a single cluster.
 test-e2e: infra-up
 	go test -tags=e2e -race -p 1 -count=1 -timeout 15m ./test/e2e/...
+
+# Load test (test-plan §9, D-21) against the running compose (docker compose up
+# --wait first). RATE, DURATION and WALLETS come from the environment.
+load-test:
+	scripts/load-test.sh
 
 check: fmt-check lint vet tidy-check go-version-check test

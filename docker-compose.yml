@@ -115,5 +115,21 @@ services:
     <<: *app
     ports: ["8083:8080", "9093:9090"]
 
+  # Load test (test-plan §9, D-21): started only by scripts/load-test.sh
+  # (make load-test) against the replicas already running.
+  k6:
+    image: grafana/k6:2.3.0
+    profiles: [load]
+    <<: *env-files # PROVIDER_A_SECRET and WALLET_SERVICE_SECRET
+    user: "${LOAD_UID:-12345}:${LOAD_GID:-12345}"
+    environment:
+      RATE: ${RATE:-200}
+      DURATION: ${DURATION:-60s}
+      WALLETS: ${WALLETS:-1000}
+    volumes:
+      - ./test/load:/scripts:ro
+      - ./.local/load:/out
+    command: ["run", "--quiet", "/scripts/wager.js"]
+
 volumes:
   pgdata:

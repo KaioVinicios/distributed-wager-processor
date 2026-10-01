@@ -100,8 +100,6 @@ linters:
     rules:
       - path: internal/observability/
         linters: [forbidigo] # a API do Prometheus exige float64; nunca é dinheiro
-      - path: test/load/
-        linters: [forbidigo] # percentis de latência no teste de carga opcional
       - path: _test\.go
         linters: [gosec, containedctx]
 
