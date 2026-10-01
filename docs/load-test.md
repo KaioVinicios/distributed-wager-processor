@@ -77,6 +77,18 @@ Medido em 30/09/2026, sobre o commit `28951ca` com o teste de carga do M12. Nenh
 | Réplicas | Padrões da `Config` ([`README.md`](../README.md) §4.3): `DB_MAX_CONNS` 10 por réplica, `DB_LOCK_TIMEOUT` 5 s, `HTTP_REQUEST_TIMEOUT` 10 s, `OUTBOX_POLL_INTERVAL` 500 ms, `OUTBOX_BATCH_SIZE` 50, `OUTBOX_CONCURRENCY` 8 e `LOG_LEVEL` `info`. As 3 réplicas rodam os 4 papéis |
 | Estado inicial | Cada taxa rodou num compose recém-subido (`docker compose down -v` e `up --build -d --wait`) |
 
+**Com o dashboard (D-22, 01/10).** Desde então, o compose também sobe o Prometheus e o Grafana. A execução canônica foi repetida com os dois de pé, num compose recém-criado e com a VM do Docker já aquecida: 6.001 enviadas (100,0/s), 0 perdidas, p50/p95/p99 de 3,5/12,3/55,9 ms, 0 erros, outbox drenada em 2,1 s, atraso da outbox p99 de 596 ms (SQL) e 1.000/1.000 carteiras consistentes. É o mesmo resultado da tabela da §4.
+
+Três execuções a 100 req/s, nesta ordem, a primeira logo depois de o Docker Desktop iniciar:
+
+| Ordem | Prometheus e Grafana | Perdidas | p50 / p95 / p99 (ms) | Drenagem |
+| --- | --- | --- | --- | --- |
+| 1ª | de pé | 1.166 | 33 / 1.352 / 4.493 | 42 s |
+| 2ª | parados | 41 | 3,5 / 418 / 1.037 | 3,2 s |
+| 3ª | de pé, esperando o Grafana ficar ocioso | 0 | 3,5 / 12,3 / 55,9 | 2,1 s |
+
+O resultado melhorou a cada execução, com ou sem os dois serviços. O que pesou foi o aquecimento da VM, não o dashboard. Antes de medir, suba o compose e rode uma execução curta para aquecer.
+
 ---
 
 ## 4. Resultados
