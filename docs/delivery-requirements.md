@@ -64,6 +64,8 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
   *(M11, 30/09: num `git clone` do GitHub (`e8ff52f`), com o volume do PostgreSQL apagado, a imagem compilada sem cache e os caches do Go vazios: `docker compose up --build --wait` saudável em 44 s; `go test ./...` e `go test -race ./...` com saída 0 (21 pacotes); `go vet ./...` sem avisos; `gofmt -l .` vazio; `make check`, `make test-integration` (22 pacotes) e `make test-e2e` com saída 0. O clone continuou sem alterações (`git status --porcelain` vazio).)*
 
+  *(01/10, depois da D-23 e da correção do R01: num `git clone` do repositório local em `ce842de` (ainda sem push), com um volume novo do PostgreSQL (projeto `pdaclean`, para não apagar o de desenvolvimento) e os caches do Go vazios (`GOMODCACHE` e `GOCACHE` temporários): `docker compose up --build --wait` saudável em 76 s, com o banco vazio e as migrations na versão 6; o roteiro do README §5 e §8.1–§8.9 executado como está escrito, só com o nome da rede adaptado ao projeto, inclusive o envio SQS com o token e a recusa de um provedor agindo em nome de outro (`PROVIDER_MISMATCH`); `go test ./...` (32 s) e `go test -race ./...` (41 s) com saída 0; `go vet ./...` sem avisos; `gofmt -l .` vazio; `make check`, `make test-integration` e `make test-e2e` com saída 0. O clone continuou sem alterações (`git status --porcelain` vazio).)*
+
 ---
 
 ## 2. Autenticação e autorização (§2)
