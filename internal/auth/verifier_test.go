@@ -1,6 +1,7 @@
 package auth_test
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,7 +30,7 @@ const (
 type idp struct {
 	key    *rsa.PrivateKey
 	server *httptest.Server
-	status int // answer of the JWKS endpoint; 0 = 200
+	status atomic.Int32 // answer of the JWKS endpoint; 0 = 200
 	keys   []jose.JSONWebKey
 }
 
@@ -41,8 +43,8 @@ func newIDP(t *testing.T) *idp {
 	i := &idp{key: key}
 	i.keys = []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: "k1", Algorithm: "RS256", Use: "sig"}}
 	i.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if i.status != 0 {
-			w.WriteHeader(i.status)
+		if s := i.status.Load(); s != 0 {
+			w.WriteHeader(int(s))
 			return
 		}
 		_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: i.keys})
@@ -171,7 +173,7 @@ func TestVerifierCheckKeys(t *testing.T) {
 	})
 	t.Run("an error answer", func(t *testing.T) {
 		i := newIDP(t)
-		i.status = http.StatusServiceUnavailable
+		i.status.Store(http.StatusServiceUnavailable)
 		if err := i.verifier(0).CheckKeys(t.Context()); err == nil {
 			t.Fatal("CheckKeys = nil, want an error")
 		}
@@ -190,4 +192,116 @@ func TestVerifierCheckKeys(t *testing.T) {
 			t.Fatal("CheckKeys = nil, want an error")
 		}
 	})
+}
+
+// without deletes one claim.
+func without(c map[string]any, key string) map[string]any {
+	delete(c, key)
+	return c
+}
+
+// Covers: AUTH-02, D-23 (U33)
+func TestAuthenticateAt(t *testing.T) {
+	i := newIDP(t)
+	v := i.verifier(30 * time.Second)
+	sent := time.Now().Add(-time.Hour)
+	other, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// at is a provider-a token issued a minute before instant, valid for 4 minutes after it.
+	at := func(instant time.Time) map[string]any {
+		return with(with(claims(), "iat", instant.Add(-time.Minute).Unix()), "exp", instant.Add(4*time.Minute).Unix())
+	}
+
+	t.Run("accepts a token valid at the instant and expired now", func(t *testing.T) {
+		raw := sign(t, jose.RS256, i.key, "k1", at(sent))
+		p, err := v.AuthenticateAt(t.Context(), raw, sent)
+		if err != nil || p.ProviderID != "provider-a" || !slices.Equal(p.Roles, []auth.Role{auth.RoleProvider}) {
+			t.Fatalf("AuthenticateAt = %+v, %v", p, err)
+		}
+		if _, err := v.Authenticate(t.Context(), raw); !errors.Is(err, auth.ErrUnauthenticated) {
+			t.Fatalf("Authenticate now = %v, want the token expired", err)
+		}
+	})
+
+	accepted := map[string]map[string]any{
+		"expired within the skew at the instant": with(at(sent), "exp", sent.Add(-10*time.Second).Unix()),
+		"with nbf within go-oidc's 5 minutes":    with(at(sent), "nbf", sent.Add(4*time.Minute).Unix()),
+	}
+	for name, c := range accepted {
+		t.Run("accepts a token "+name, func(t *testing.T) {
+			if _, err := v.AuthenticateAt(t.Context(), sign(t, jose.RS256, i.key, "k1", c), sent); err != nil {
+				t.Fatalf("AuthenticateAt = %v", err)
+			}
+		})
+	}
+
+	rejected := map[string]string{
+		"expired beyond the skew at the instant": sign(t, jose.RS256, i.key, "k1", with(at(sent), "exp", sent.Add(-40*time.Second).Unix())),
+		"without exp":                            sign(t, jose.RS256, i.key, "k1", without(at(sent), "exp")),
+		"not valid yet at the instant":           sign(t, jose.RS256, i.key, "k1", with(at(sent), "nbf", sent.Add(6*time.Minute).Unix())),
+		"signed by another key":                  sign(t, jose.RS256, other, "k1", at(sent)),
+		"another issuer":                         sign(t, jose.RS256, i.key, "k1", with(at(sent), "iss", "http://idp.test/realms/other")),
+		"another audience":                       sign(t, jose.RS256, i.key, "k1", with(at(sent), "aud", "account")),
+		"alg none":                               unsigned(t, at(sent)),
+		"malformed":                              "not-a-jwt",
+	}
+	for name, raw := range rejected {
+		t.Run("rejects "+name, func(t *testing.T) {
+			if _, err := v.AuthenticateAt(t.Context(), raw, sent); !errors.Is(err, auth.ErrUnauthenticated) {
+				t.Fatalf("AuthenticateAt = %v, want ErrUnauthenticated", err)
+			}
+		})
+	}
+}
+
+// Covers: SQS-07, D-23 (U34)
+// Sensitivity: NewVerifier with the RemoteKeySet itself, without observedKeySet → "Authenticate with the JWKS answering 503 = auth: unauthenticated: …".
+func TestVerifierKeysUnavailable(t *testing.T) {
+	i := newIDP(t)
+	v := i.verifier(30 * time.Second) // no key cached yet: the first verification fetches them
+	raw := sign(t, jose.RS256, i.key, "k1", claims())
+
+	i.status.Store(http.StatusServiceUnavailable)
+	if _, err := v.Authenticate(t.Context(), raw); !errors.Is(err, auth.ErrKeysUnavailable) || errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("Authenticate with the JWKS answering 503 = %v, want ErrKeysUnavailable only", err)
+	}
+	if _, err := v.AuthenticateAt(t.Context(), raw, time.Now()); !errors.Is(err, auth.ErrKeysUnavailable) {
+		t.Fatalf("AuthenticateAt with the JWKS answering 503 = %v, want ErrKeysUnavailable", err)
+	}
+
+	i.status.Store(0)
+	// go-oidc clears a finished fetch just after answering it: a call right
+	// away may still get that answer, so the recovery gets a second.
+	for deadline := time.Now().Add(time.Second); ; time.Sleep(10 * time.Millisecond) {
+		_, err := v.AuthenticateAt(t.Context(), raw, time.Now())
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("AuthenticateAt with the JWKS back = %v, want the token accepted", err)
+		}
+	}
+	other, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := sign(t, jose.RS256, other, "k9", claims()) // an unknown kid: the keys are fetched again and answer
+	if _, err := v.Authenticate(t.Context(), forged); !errors.Is(err, auth.ErrUnauthenticated) || errors.Is(err, auth.ErrKeysUnavailable) {
+		t.Fatalf("Authenticate of a forged token = %v, want ErrUnauthenticated only", err)
+	}
+
+	// A shutdown in the middle of a fetch: transient, with context.Canceled in
+	// the chain, so the consumer releases the message (Review Focus 4).
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := i.verifier(30*time.Second).AuthenticateAt(canceled, raw, time.Now()); !errors.Is(err, auth.ErrKeysUnavailable) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("AuthenticateAt with a canceled context = %v, want ErrKeysUnavailable wrapping context.Canceled", err)
+	}
+
+	i.server.Close()
+	if _, err := i.verifier(30*time.Second).Authenticate(t.Context(), raw); !errors.Is(err, auth.ErrKeysUnavailable) {
+		t.Fatalf("Authenticate with the JWKS unreachable = %v, want ErrKeysUnavailable", err)
+	}
 }

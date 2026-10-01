@@ -30,7 +30,7 @@ func TestModule(t *testing.T) {
 
 	t.Run("fails to start without the key set", func(t *testing.T) {
 		i := newIDP(t)
-		i.status = http.StatusServiceUnavailable
+		i.status.Store(http.StatusServiceUnavailable)
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
 		err := moduleApp(t, i.server.URL).Start(ctx)
