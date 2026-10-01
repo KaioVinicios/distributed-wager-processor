@@ -1799,7 +1799,7 @@
     {
       "type": "timeseries",
       "title": "Acessos recusados",
-      "description": "auth_failures_total por motivo: unauthenticated (401), forbidden (403) e provider_mismatch (provedor tentando acessar dados de outro).",
+      "description": "auth_failures_total por motivo: unauthenticated (401), forbidden (403) e provider_mismatch (provedor tentando acessar dados de outro). Conta as requisições HTTP e as mensagens SQS recusadas (D-23); o canal aparece em sqs_dlq_sent_total.",
       "id": 33,
       "datasource": {
         "type": "prometheus",
