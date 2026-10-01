@@ -244,7 +244,7 @@ Testes R01–R04: queda do PostgreSQL, queda do SQS e shutdown gracioso com HTTP
 
 - **Como foi feito** (roteiro no chat, aprovado pelo autor):
   - `docker compose down -v` do ambiente de desenvolvimento, porque o compose fixa o projeto `pda` e as portas;
-  - `git clone` do GitHub (`49c647f`) no scratchpad;
+  - `git clone` do GitHub (`e8ff52f`) no scratchpad;
   - imagem compilada com `--no-cache` e `GOCACHE`/`GOMODCACHE` vazios;
   - os blocos `sh` do README extraídos do próprio arquivo e executados como estão escritos, em `bash` e em `zsh`.
 - **Resultado:**

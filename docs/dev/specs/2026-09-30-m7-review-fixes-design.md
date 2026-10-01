@@ -2,7 +2,7 @@
 
 **Data:** 30/09/2026 · **Caminho:** correção pontual (*bounded*, [`development-workflow.md`](../../development-workflow.md) §2), com spec e plano curtos · **Status:** escrita a pedido do autor ("escreva a spec toda de uma vez, e já parta direto para o plano"); a aprovação vale para spec e plano juntos, antes da execução
 
-**Origem:** revisão do M7 (`83e19b7..7aac1e3`) feita depois do marco, com o Opus, contra a [spec do M7](2026-09-30-m7-observability-design.md) e o [`delivery-requirements.md`](../../delivery-requirements.md). Dois achados tornam falsas marcações `[x]` feitas no M7 (FX-02 no caminho novo e OBS-01); os demais são de documentação ou de evidência.
+**Origem:** revisão do M7 (`8844271..da6f2ad`) feita depois do marco, com o Opus, contra a [spec do M7](2026-09-30-m7-observability-design.md) e o [`delivery-requirements.md`](../../delivery-requirements.md). Dois achados tornam falsas marcações `[x]` feitas no M7 (FX-02 no caminho novo e OBS-01); os demais são de documentação ou de evidência.
 
 Esta spec registra só o **delta** em relação ao M7.
 

@@ -67,7 +67,7 @@ RATE=20 DURATION=5s WALLETS=50 make load-test # execução curta, para conferir 
 
 ## 3. Ambiente
 
-Medido em 30/09/2026, sobre o commit `c7a3640` com o teste de carga do M12. Nenhum código de produção mudou no M12.
+Medido em 30/09/2026, sobre o commit `28951ca` com o teste de carga do M12. Nenhum código de produção mudou no M12.
 
 | Item | Valor |
 | --- | --- |

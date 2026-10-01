@@ -62,7 +62,7 @@ Em todos eles, a verificação de consistência de [`test-plan.md`](test-plan.md
 
   *(M10, 30/09: os 4 comandos passam no repositório (`go test ./...` e `go test -race ./...` com saída 0, `go vet ./...` sem avisos, `docker compose up --build --wait` saudável); a execução a partir de um clone limpo é o M11.)*
 
-  *(M11, 30/09: num `git clone` do GitHub (`49c647f`), com o volume do PostgreSQL apagado, a imagem compilada sem cache e os caches do Go vazios: `docker compose up --build --wait` saudável em 44 s; `go test ./...` e `go test -race ./...` com saída 0 (21 pacotes); `go vet ./...` sem avisos; `gofmt -l .` vazio; `make check`, `make test-integration` (22 pacotes) e `make test-e2e` com saída 0. O clone continuou sem alterações (`git status --porcelain` vazio).)*
+  *(M11, 30/09: num `git clone` do GitHub (`e8ff52f`), com o volume do PostgreSQL apagado, a imagem compilada sem cache e os caches do Go vazios: `docker compose up --build --wait` saudável em 44 s; `go test ./...` e `go test -race ./...` com saída 0 (21 pacotes); `go vet ./...` sem avisos; `gofmt -l .` vazio; `make check`, `make test-integration` (22 pacotes) e `make test-e2e` com saída 0. O clone continuou sem alterações (`git status --porcelain` vazio).)*
 
 ---
 

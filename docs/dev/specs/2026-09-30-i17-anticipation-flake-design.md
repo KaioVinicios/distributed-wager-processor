@@ -8,7 +8,7 @@
 
 ## 1. Investigação (causa raiz)
 
-**Sintoma:** `TestDomainFlowsPersist` (I17, `internal/adapters/postgres/flows_integration_test.go`, commit `240a9f4` do M2) falha com `refund-2 was not advanced: next attempt …`.
+**Sintoma:** `TestDomainFlowsPersist` (I17, `internal/adapters/postgres/flows_integration_test.go`, commit `bb1abc9` do M2) falha com `refund-2 was not advanced: next attempt …`.
 
 **Evidências:**
 

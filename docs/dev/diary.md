@@ -223,7 +223,7 @@ Anotações curtas do autor: o que foi feito em cada sessão e onde o trabalho p
 - Roteiro no chat, aprovado pelo autor. O M11 não tem spec nem TDD: é `verification-before-completion` do começo ao fim ([`development-workflow.md`](../development-workflow.md) §2).
 - **"Do zero", na escolha do autor:**
   - `docker compose down -v` do ambiente de desenvolvimento, porque o compose fixa o projeto `pda` e as portas;
-  - `git clone` do GitHub (`49c647f`) no scratchpad;
+  - `git clone` do GitHub (`e8ff52f`) no scratchpad;
   - `docker compose build --no-cache`;
   - `GOCACHE`/`GOMODCACHE` vazios;
   - as imagens base já baixadas ficaram, mas cada tag fixa foi conferida no registry.
