@@ -20,6 +20,12 @@ const AuditTimeout = 10 * time.Second
 // receiveTimeout bounds one receive of Absent: well above its 1 s long poll.
 const receiveTimeout = 5 * time.Second
 
+// auditVisibility (seconds) hides a received batch only briefly: a batch the
+// Audit did not record or delete (a response lost and retried by the SDK, a
+// delete that did not arrive) comes back within AuditTimeout instead of
+// blocking its FIFO group for the queue's 30 s (spec audit-lost-receive).
+const auditVisibility = 2
+
 // Attribute is one message attribute of a delivery.
 type Attribute struct {
 	Type  string // String or Number
@@ -35,10 +41,13 @@ type AuditMessage struct {
 	ContractErr error // the body violates api/events.yaml
 }
 
-// Audit collects the audit queue of one events topic. Every delivery is kept
-// by eventId, so tests running in parallel over the same queue each find their
-// own events, and each delivery is checked against the event contract (spec M4,
-// decision 17). Deliveries are deleted from the queue as soon as they are read.
+// Audit collects the audit queue of one events topic. Every message is kept
+// once by eventId, so tests running in parallel over the same queue each find
+// their own events, and each message is checked against the event contract
+// (spec M4, decision 17). A message the broker delivers again (its delete did
+// not arrive) is not a new delivery; a new message from the topic is (spec
+// audit-lost-receive, decision 2). Messages are deleted from the queue as soon
+// as they are read.
 type Audit struct {
 	client   *sqs.Client
 	url      string
@@ -46,6 +55,7 @@ type Audit struct {
 
 	mu   sync.Mutex
 	byID map[string][]AuditMessage // "" keeps bodies without a readable eventId
+	seen map[string]struct{}       // SQS MessageId of the messages kept
 }
 
 // NewAudit reads queueURL and validates every delivery against the event contract.
@@ -54,7 +64,7 @@ func NewAudit(ctx context.Context, client *sqs.Client, queueURL string) (*Audit,
 	if err != nil {
 		return nil, err
 	}
-	return &Audit{client: client, url: queueURL, contract: contract, byID: map[string][]AuditMessage{}}, nil
+	return &Audit{client: client, url: queueURL, contract: contract, byID: map[string][]AuditMessage{}, seen: map[string]struct{}{}}, nil
 }
 
 // Wait receives until every id has at least one delivery, or ctx ends. It
@@ -135,13 +145,14 @@ func (a *Audit) lookupAll(ids []string) map[string][]AuditMessage {
 	return got
 }
 
-// receive reads one batch (long poll of 1 s), records it and deletes it.
+// receive reads one batch (long poll of 1 s, hidden for auditVisibility),
+// records it and deletes it.
 func (a *Audit) receive(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	out, err := a.client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-		QueueUrl: aws.String(a.url), MaxNumberOfMessages: 10, WaitTimeSeconds: 1,
+		QueueUrl: aws.String(a.url), MaxNumberOfMessages: 10, WaitTimeSeconds: 1, VisibilityTimeout: auditVisibility,
 		MessageSystemAttributeNames: []types.MessageSystemAttributeName{
 			types.MessageSystemAttributeNameMessageGroupId, types.MessageSystemAttributeNameMessageDeduplicationId,
 		},
@@ -164,8 +175,12 @@ func (a *Audit) receive(ctx context.Context) error {
 	return err
 }
 
-// record keeps one delivery; a.mu is held.
+// record keeps one message, once; a.mu is held.
 func (a *Audit) record(m types.Message) {
+	if _, ok := a.seen[aws.ToString(m.MessageId)]; ok {
+		return // delivered again by the broker: its delete did not arrive
+	}
+	a.seen[aws.ToString(m.MessageId)] = struct{}{}
 	body := []byte(aws.ToString(m.Body))
 	msg := AuditMessage{
 		Body:        body,

@@ -5,11 +5,16 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"net/http"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	snstypes "github.com/aws/aws-sdk-go-v2/service/sns/types"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -147,5 +152,110 @@ func TestAuditAbsentLeavesNoPollBehind(t *testing.T) {
 		if err != nil {
 			t.Fatalf("event sent after Absent: %v", err)
 		}
+	}
+}
+
+// onceHTTP sends every request to the SDK transport, except the first one of
+// the SQS action target that intercept picks (hit): the broker's answer to that
+// one is replaced, as a network fault would (spec audit-lost-receive, decision 5).
+type onceHTTP struct {
+	next      aws.HTTPClient
+	target    string // X-Amz-Target, e.g. AmazonSQS.ReceiveMessage
+	intercept func(next aws.HTTPClient, req *http.Request) (*http.Response, bool, error)
+	hit       atomic.Bool
+}
+
+func (c *onceHTTP) Do(req *http.Request) (*http.Response, error) {
+	if c.hit.Load() || req.Header.Get("X-Amz-Target") != c.target {
+		return c.next.Do(req)
+	}
+	resp, hit, err := c.intercept(c.next, req)
+	if hit {
+		c.hit.Store(true)
+	}
+	return resp, err
+}
+
+// auditThrough is an Audit of a new isolated topic whose SQS client goes
+// through c; the returned client reaches the broker directly.
+func auditThrough(t *testing.T, c *onceHTTP) (*testkit.Audit, *sqs.Client, testkit.EventsTopic) {
+	t.Helper()
+	root := testkit.RootAWSConfig(t)
+	sqsClient := sqs.NewFromConfig(root)
+	topic := testkit.NewEventsTopic(t, sqsClient, sns.NewFromConfig(root))
+	c.next = awshttp.NewBuildableClient()
+	faulty := root.Copy()
+	faulty.HTTPClient = c
+	audit, err := testkit.NewAudit(t.Context(), sqs.NewFromConfig(faulty), topic.AuditQueueURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return audit, sqsClient, topic
+}
+
+// Covers: TST-I05 (spec audit-lost-receive, decision 1)
+//
+// A receive the broker served but whose response never reached the Audit (the
+// SDK retries a connection reset) hides its messages only for the Audit's own
+// visibility, not for the queue's 30 s: every event of the group still arrives
+// within AuditTimeout (the flake of I05a on CI).
+func TestAuditRecoversLostReceive(t *testing.T) {
+	t.Parallel()
+	lose := &onceHTTP{target: "AmazonSQS.ReceiveMessage", intercept: func(next aws.HTTPClient, req *http.Request) (*http.Response, bool, error) {
+		resp, err := next.Do(req)
+		if err != nil {
+			return resp, false, err
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, false, err
+		}
+		if !bytes.Contains(body, []byte(`"Messages"`)) {
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			return resp, false, nil
+		}
+		return nil, true, errors.New("read tcp: connection reset by peer")
+	}}
+	audit, sqsClient, topic := auditThrough(t, lose)
+	wallet := testkit.NewID()
+	ids := []string{testkit.NewID(), testkit.NewID(), testkit.NewID()}
+	for _, id := range ids {
+		testkit.SendMessage(t, sqsClient, topic.AuditQueueURL, auditEnvelope(id, wallet, ""), testkit.SendOpts{GroupID: wallet, DedupID: id})
+	}
+	audit.WaitFor(t, ids...)
+	if !lose.hit.Load() {
+		t.Fatal("no receive response was lost: the test proves nothing")
+	}
+}
+
+// Covers: TST-I05 (spec audit-lost-receive, decision 2)
+//
+// A message the broker delivers again, because its delete did not arrive, is
+// kept once: only a new message from the topic counts as a new delivery.
+func TestAuditCountsRedeliveryOnce(t *testing.T) {
+	t.Parallel()
+	swallow := &onceHTTP{target: "AmazonSQS.DeleteMessageBatch", intercept: func(_ aws.HTTPClient, req *http.Request) (*http.Response, bool, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK, Request: req,
+			Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}},
+			Body:   io.NopCloser(strings.NewReader(`{"Successful":[],"Failed":[]}`)),
+		}, true, nil
+	}}
+	audit, sqsClient, topic := auditThrough(t, swallow)
+	wallet, id, last := testkit.NewID(), testkit.NewID(), testkit.NewID()
+	send := func(id string) {
+		t.Helper()
+		testkit.SendMessage(t, sqsClient, topic.AuditQueueURL, auditEnvelope(id, wallet, ""), testkit.SendOpts{GroupID: wallet, DedupID: id})
+	}
+	send(id)
+	audit.WaitFor(t, id)
+	send(last)
+	got := audit.WaitFor(t, last, id) // same group: last comes only with or after id's redelivery
+	if !swallow.hit.Load() {
+		t.Fatal("no delete was swallowed: the test proves nothing")
+	}
+	if n := len(got[id]); n != 1 {
+		t.Fatalf("deliveries of %s = %d, want 1 (a redelivery counted as a new delivery)", id, n)
 	}
 }
