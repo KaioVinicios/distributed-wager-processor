@@ -1,11 +1,54 @@
 # pda: Processamento Distribuído de Apostas
 
+**Português** · [English](README.en.md)
+
+[![CI](https://github.com/KaioVinicios/pda/actions/workflows/ci.yml/badge.svg)](https://github.com/KaioVinicios/pda/actions/workflows/ci.yml)
+![Go 1.27.1](https://img.shields.io/badge/Go-1.27.1-00ADD8?logo=go&logoColor=white)
+![PostgreSQL 18](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Serviço em Go que movimenta carteiras de jogadores a partir de operações de provedores de jogos (`BET`, `WIN`, `LOSS`, `REFUND` e `ROLLBACK`), recebidas por **HTTP** e por **SQS**, com as mesmas garantias nos dois canais: dinheiro sem ponto flutuante, ledger append-only e auditável, idempotência persistente, coordenação por carteira entre várias instâncias, inbox e outbox transacionais e recuperação de falhas.
 
 - **Stack:** Go 1.27.1, Uber Fx, `net/http`, PostgreSQL 18 (`pgx/v5`, SQL explícito), Keycloak 26 (OIDC, `client_credentials`), SQS e SNS FIFO no MiniStack, `golang-migrate`, `log/slog` e Prometheus.
 - **Execução:** `docker compose up --build` sobe toda a infraestrutura e **3 réplicas** independentes do serviço.
 - **Primeira vez aqui?** O [`docs/getting-started.md`](docs/getting-started.md) explica o projeto em linguagem simples e traz um roteiro de validação com os resultados esperados.
 - **Decisões técnicas:** [`ARCHITECTURE.md`](ARCHITECTURE.md). **Testes:** [`docs/testing.md`](docs/testing.md). **Enunciado:** [`CHALLENGE.md`](CHALLENGE.md).
+
+---
+
+## Destaques
+
+Cada garantia abaixo é imposta pelo código ou pelo banco **e** coberta por um teste automatizado. Os testes de integração rodam contra PostgreSQL, Keycloak e MiniStack reais, em containers, e os e2e rodam 3 processos do binário.
+
+| Garantia | Como | Comprovada por |
+| --- | --- | --- |
+| **Dinheiro exato** | `int64` em unidades mínimas, com moeda ISO 4217; parsing estrito de string decimal; overflow verificado em toda operação. Nenhum `float32`/`float64` | [`TestNoFloatInMoney`](internal/domain/money/nofloat_test.go) (varredura da AST) + lint `forbidigo`, [`FuzzParseMoney`](internal/domain/money/money_fuzz_test.go) |
+| **Ledger auditável e append-only** | Triggers bloqueiam `UPDATE`/`DELETE`/`TRUNCATE` (até para o dono das tabelas); a role da aplicação não tem esses privilégios; `CHECK (saldo >= 0)` e triggers de coerência no schema; a reconciliação reconstrói o saldo a partir do ledger | [`TestLedgerImmutable`](internal/adapters/postgres/protection_integration_test.go), [`TestConstraints`](internal/adapters/postgres/constraints_integration_test.go) |
+| **Idempotência persistente nos dois canais** | HTTP e SQS compartilham um único caso de uso; chaves únicas no PostgreSQL; o replay devolve o resultado persistido, inclusive o saldo observado na época | [`TestSameBet50xHTTP`, `TestSameBet50xSQS`](test/e2e/idempotency_test.go), [`TestHTTPAndSQSConcurrent`](test/e2e/channels_test.go), [`TestReplayReturnsOriginalBalance`](test/integration/wagering_test.go) |
+| **Coordenação por carteira, sem lock global** | `SELECT … FOR UPDATE` na linha da carteira, com a checagem de versão e o `CHECK` do saldo como defesas adicionais. Duas apostas simultâneas de 80.00 numa carteira de 100.00, enviadas a processos diferentes, geram 1 débito e saldo final de 20.00, 20 vezes seguidas | [`TestTwoBetsCompete`, `TestNoGlobalLock`](test/e2e/concurrency_test.go) |
+| **Segurança contra quedas** | Inbox e outbox transacionais; eventos publicados só depois do commit; o publisher da outbox usa leases, então outra instância reassume o trabalho abandonado, com o mesmo `eventId` | [`TestCrashAfterCommitBeforeDelete`, `TestHTTPCrashAfterCommit`](test/e2e/crash_test.go), [`TestPublisherCrashAfterPublish`](test/e2e/outbox_test.go), [`TestNoPublishBeforeCommit`](internal/adapters/outbox/publisher_integration_test.go), [`TestFullRestart`](test/e2e/restart_test.go) |
+| **Reversões fora de ordem** | Um `REFUND`/`ROLLBACK` que chega antes da `BET` espera em `PENDING_REFERENCE`; um worker durável tenta de novo com backoff e o rejeita com `REFERENCE_NOT_FOUND` depois de um TTL | [`TestRefundBeforeBet`, `TestRefundReferenceExpires`](test/e2e/references_test.go) |
+| **Indisponibilidade das dependências** | Dependências congeladas com `docker compose pause` sob tráfego. PostgreSQL fora: 503 com `Retry-After`, depois toda operação gravada uma única vez e nenhuma mensagem na DLQ. MiniStack fora: o HTTP continua processando, e a outbox acumula e esvazia depois | [`TestPostgresOutage`, `TestSQSOutage`](test/e2e/resilience_test.go) |
+| **Autenticação e isolamento entre provedores** | Tokens OIDC do Keycloak validados localmente (JWKS, `iss`, `aud`, `exp`); o provedor vem do token, nunca do corpo, no HTTP e no SQS; políticas IAM no broker | [`TestProviderIsolationQueries`, `TestUnauthorizedHasNoEffects`](test/integration/auth_test.go) |
+
+Ao fim de cada cenário, o [`AssertWalletConsistent`](test/testkit/assert.go) confere que o saldo armazenado é igual aos créditos menos os débitos do ledger. O binário dos testes e2e é compilado com `-race`, e qualquer data race registrada reprova a suíte.
+
+**Teste de carga** ([`docs/load-test.md`](docs/load-test.md)): 100 req/s por 60 s nas 3 réplicas, p50/p95/p99 de 3,8/14,3/98,2 ms, 0 erros e 1.000 de 1.000 carteiras consistentes ao final.
+
+## Arquitetura em um minuto
+
+O diagrama completo, com os papéis de cada componente, está no [`ARCHITECTURE.md`](ARCHITECTURE.md) §1.
+
+- **Um binário, quatro papéis:** API HTTP, consumidor SQS, publisher da outbox e worker de referências, cada um ligado ou desligado por variável de ambiente.
+- **Um caso de uso para todas as entradas:** só a borda muda, então HTTP, SQS e o worker têm as mesmas garantias.
+- **O PostgreSQL é a fonte da verdade:** unicidade, saldo não negativo, imutabilidade, idempotência, agendas de retentativa e eventos pendentes ficam no banco. A correção nunca depende de estado em memória, de uma instância específica nem da deduplicação do SQS FIFO.
+- **Camadas:** `domain` (entidades e regras, só stdlib), `app` (casos de uso e portas), `adapters` (PostgreSQL, HTTP, SQS, SNS, workers) e `bootstrap` (composição Fx). Uma regra de lint (`depguard`) e um teste mantêm a infraestrutura fora do domínio.
+
+## Como foi construído
+
+- **Documentação primeiro:** requisitos, modelo de dados, ciclo de vida das transações, contratos de mensageria e plano de testes foram escritos antes do código ([`docs/`](docs/)). Cada uma das 23 decisões de design está registrada, com o motivo, em [`docs/decisions.md`](docs/decisions.md).
+- **Spec → plano → TDD em toda mudança**, inclusive correções ([`docs/development-workflow.md`](docs/development-workflow.md)). Os testes escritos sobre comportamento já existente passaram pela checagem de sensibilidade: sabotar o código, ver o teste falhar, desfazer.
+- **Rastreabilidade:** o [`docs/delivery-requirements.md`](docs/delivery-requirements.md) liga cada requisito ao teste que o comprova. Specs, planos e o diário de desenvolvimento ficam em [`docs/dev/`](docs/dev/).
 
 ---
 
